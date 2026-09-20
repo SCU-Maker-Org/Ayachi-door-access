@@ -3,10 +3,10 @@
 use super::{HOSTNAME, NAME, PORT};
 use core::cell::Cell;
 use core::net::Ipv4Addr;
-use edge_mdns::{HostAnswer, HostAnswers, HostAnswersMdnsHandler, MdnsError};
 use edge_mdns::buf::VecBufAccess;
 use edge_mdns::domain::base::Ttl;
 use edge_mdns::host::{Host, Service, ServiceAnswers};
+use edge_mdns::{HostAnswer, HostAnswers, HostAnswersMdnsHandler, MdnsError};
 use edge_nal::UdpSplit;
 use edge_nal_embassy::UdpBuffers;
 use embassy_net::{Ipv6Address, Stack};

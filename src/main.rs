@@ -6,13 +6,13 @@
 
 pub mod ayachi_core;
 
-use ayachi_core::{MAX_CONNECTIONS, WIFI_RETRY_DELAY};
-use ayachi_core::door::door_task;
-use ayachi_core::server::{AyachiServer, server_task};
 use ayachi_core::SpawnerExt;
+use ayachi_core::door::door_task;
 use ayachi_core::door::{Door, DoorSignal};
 use ayachi_core::mdns::{MdnsAnswers, mdns_task};
 use ayachi_core::network::{Network, network_task};
+use ayachi_core::server::{AyachiServer, server_task};
+use ayachi_core::{MAX_CONNECTIONS, WIFI_PASSWORD, WIFI_RETRY_DELAY, WIFI_SSID};
 use embassy_futures::select::{Either3, select3};
 use embassy_time::Timer;
 use esp_alloc as _;
@@ -21,7 +21,6 @@ use esp_hal::gpio::{Input, InputConfig, Pull};
 use esp_hal::timer::timg::TimerGroup;
 use esp_println as _;
 use esp_radio::wifi::WifiError;
-use crate::ayachi_core::{WIFI_PASSWORD, WIFI_SSID};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 

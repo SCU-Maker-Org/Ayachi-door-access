@@ -1,5 +1,6 @@
 // Made by Han_feng
 
+use super::DOOR_OPEN_ONCE_DELAY;
 use core::cell::{Cell, RefCell};
 use embassy_futures::select::{Either3, select3};
 use embassy_sync::blocking_mutex::CriticalSectionMutex;
@@ -7,7 +8,6 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use esp_hal::__macro_implementation::static_cell::StaticCell;
 use esp_hal::gpio::{Level, Output, OutputConfig, OutputPin};
-use super::DOOR_OPEN_ONCE_DELAY;
 
 // Enums
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
