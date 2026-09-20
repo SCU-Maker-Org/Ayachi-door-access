@@ -1,0 +1,16 @@
+[build]
+target = "xtensa-esp32s3-none-elf"
+
+[unstable]
+build-std = ["core", "alloc"]
+
+[target.xtensa-esp32s3-none-elf]
+runner = "espflash flash --monitor"
+rustflags = [
+    "-C", "link-arg=-Tlinkall.x",
+    "-C", "link-arg=-Tdefmt.x",
+    "-C", "link-arg=-Wl,--no-warn-rwx-segments",
+]
+
+[env]
+DEFMT_LOG = "info"

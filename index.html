@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>门禁控制面板</title>
+<style>
+:root{
+  --bg:#f2f2f7; --card:#fff; --text:#1c1c1e; --muted:#8a8a8e;
+  --line:#e5e5ea; --accent:#007aff; --accent-ink:#fff;
+  --open:#34c759; --lock:#8e8e93; --danger:#ff3b30;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#000; --card:#1c1c1e; --text:#f2f2f7; --muted:#8e8e93;
+    --line:#2c2c2e; --accent:#0a84ff; --accent-ink:#fff;
+    --open:#30d158; --lock:#8e8e93; --danger:#ff453a;
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  min-height:100dvh; padding:24px 16px calc(24px + env(safe-area-inset-bottom));
+  background:var(--bg); color:var(--text);
+  font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",
+       "Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  display:flex; justify-content:center; align-items:flex-start;
+  -webkit-font-smoothing:antialiased;
+}
+main{width:100%; max-width:400px}
+
+header{margin-bottom:20px; padding:0 4px; text-align:center}
+h1{font-size:24px; font-weight:700; letter-spacing:-.02em}
+.sub{margin-top:2px; font-size:13px; color:var(--muted)}
+
+.panel{
+  background:var(--card); border-radius:18px; padding:20px;
+  box-shadow:0 1px 3px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.06);
+}
+
+/* ── 状态 ── */
+.status{
+  display:flex; align-items:center; gap:10px;
+  padding:14px 16px; margin-bottom:20px;
+  background:var(--bg); border-radius:12px;
+  font-size:15px; color:var(--muted);
+}
+.dot{
+  width:9px; height:9px; border-radius:50%; flex:none;
+  background:var(--lock); transition:background .25s;
+}
+.status[data-open="1"] .dot{background:var(--open)}
+.status[data-live="0"] .dot{animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.2}}
+#state{
+  margin-left:auto; font-weight:600; color:var(--text);
+  font-variant-numeric:tabular-nums;
+}
+
+/* ── 按钮 ── */
+.acts{display:grid; gap:12px}
+.row{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+
+button{
+  width:100%; min-height:52px; padding:14px 16px;
+  font:inherit; font-weight:500; color:var(--text);
+  background:transparent; border:1.5px solid var(--line); border-radius:14px;
+  cursor:pointer; touch-action:manipulation;
+  -webkit-tap-highlight-color:transparent;
+  transition:transform .08s, background .15s, border-color .15s, opacity .15s;
+}
+button:active{transform:scale(.97)}
+button:hover:not(:disabled){background:color-mix(in srgb,var(--text) 5%,transparent)}
+button:disabled{opacity:.4; cursor:default; transform:none}
+
+.primary{
+  min-height:64px; font-size:18px; font-weight:600;
+  color:var(--accent-ink); background:var(--accent); border-color:var(--accent);
+}
+.primary:hover:not(:disabled){background:var(--accent); filter:brightness(1.08)}
+
+/* 按住时给个"正在执行"的视觉 */
+.primary.busy{filter:brightness(.9)}
+
+#msg{
+  margin-top:16px; min-height:22px;
+  font-size:13.5px; color:var(--muted); text-align:center;
+  transition:color .2s;
+}
+#msg[data-kind="ok"]  {color:var(--open)}
+#msg[data-kind="err"] {color:var(--danger)}
+
+footer{
+  margin-top:20px; padding:0 4px;
+  font-size:12px; color:var(--muted); text-align:center; line-height:1.7;
+}
+footer a{color:var(--accent); text-decoration:none}
+footer a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<main>
+
+  <header>
+    <h1>门禁控制面板</h1>
+    <div class="sub" id="host">&nbsp;</div>
+  </header>
+
+  <div class="panel">
+
+    <div class="status" id="status" data-live="0">
+      <span class="dot"></span>
+      <span>当前状态</span>
+      <span id="state">读取中</span>
+    </div>
+
+    <div class="acts">
+      <button class="primary" id="open">开门一次</button>
+      <div class="row">
+        <button data-act="/setopen?state=1">持续开放</button>
+        <button data-act="/setopen?state=0">设为锁定</button>
+      </div>
+    </div>
+
+    <p id="msg"></p>
+
+  </div>
+
+  <footer>
+    Han_feng · 2026<br>
+    More information on: <a href="https://github.com/SCU-Maker-Org/Ayachi-door-access"
+                            target="_blank" rel="noopener">GitHub</a>
+  </footer>
+
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  var statusEl = document.getElementById('status');
+  var stateEl  = document.getElementById('state');
+  var msgEl    = document.getElementById('msg');
+  var openBtn  = document.getElementById('open');
+  var allBtns  = document.querySelectorAll('button');
+
+  // 页面地址就是访问地址 —— 不用服务端注入主机名
+  document.getElementById('host').textContent = location.host;
+
+  function say(text, kind) {
+    msgEl.textContent = text;
+    if (kind) { msgEl.dataset.kind = kind; }
+    else      { delete msgEl.dataset.kind; }
+  }
+
+  function lockButtons(on) {
+    for (var i = 0; i < allBtns.length; i++) { allBtns[i].disabled = on; }
+  }
+
+  // ── 状态轮询 ──
+  // 后端还没有 /status 路由时，安静地降级成 "—"，不影响其他功能
+  function refresh() {
+    fetch('/status', { cache: 'no-store' })
+      .then(function (r) {
+        if (!r.ok) { throw new Error(r.status); }
+        return r.text();
+      })
+      .then(function (t) {
+        var open = t.trim() === 'open';
+        stateEl.textContent = open ? '开放' : '锁定';
+        statusEl.dataset.open = open ? '1' : '0';
+        statusEl.dataset.live = '1';
+      })
+      .catch(function () {
+        stateEl.textContent = '—';
+        statusEl.dataset.live = '0';
+      });
+  }
+
+  // ── 发指令 ──
+  function send(url, btn, done) {
+    lockButtons(true);
+    if (btn) { btn.classList.add('busy'); }
+    say('执行中…');
+
+    fetch(url, { cache: 'no-store' })
+      .then(function (r) {
+        return r.text().then(function (body) {
+          if (!r.ok) { throw new Error(body.trim() || ('HTTP ' + r.status)); }
+        });
+      })
+      .then(function () { say(done, 'ok'); })
+      .catch(function (e) { say('失败：' + e.message, 'err'); })
+      .finally(function () {
+        lockButtons(false);
+        if (btn) { btn.classList.remove('busy'); }
+        refresh();
+      });
+  }
+
+  openBtn.addEventListener('click', function () {
+    // UI 层防御：门已经开放时不再发请求。
+    // 真正的守卫在服务端 —— door_task 里 `status() == Lock` 那个判断。
+    if (statusEl.dataset.open === '1') {
+      say('门已经是开放状态了');
+      return;
+    }
+
+    send('/open', openBtn, '已开门，3 秒后自动上锁');
+  });
+
+  document.querySelectorAll('button[data-act]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      send(btn.dataset.act, btn, btn.textContent + '：已设置');
+    });
+  });
+
+  refresh();
+  setInterval(refresh, 3000);   // 开门 3 秒会自锁，轮询快一点才看得到
+
+  // 页面回到前台时立刻刷一次
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) { refresh(); }
+  });
+})();
+</script>
+</body>
+</html>
