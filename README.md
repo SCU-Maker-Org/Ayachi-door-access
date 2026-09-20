@@ -93,8 +93,8 @@ charge-only and will never be recognised by the host — if `espflash` reports
   cargo install espflash
   ```
 
-- A working Cargo mirror if you are behind a slow connection. `Cargo.lock` is
-  committed, so resolved versions are reproducible.
+- A working Cargo mirror if you are behind a slow connection — `Cargo.lock` is
+  gitignored, so the first build resolves the dependency versions itself.
 
 ---
 
