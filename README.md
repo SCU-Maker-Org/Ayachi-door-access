@@ -12,8 +12,6 @@ long-standing bugs fixed along the way. The device joins the local Wi-Fi
 network, serves a small web control panel, and can also be operated from a
 physical button next to the door.
 
----
-
 ## Features
 
 - **Web control panel** — open the door, or switch it to stay unlocked, from any
@@ -30,8 +28,6 @@ physical button next to the door.
 - **Configuration as a file** — network credentials and accounts live in a TOML
   file that is compiled into the firmware, so there is one place to edit and no
   runtime setup.
-
----
 
 ## Hardware
 
@@ -59,8 +55,6 @@ GPIO5  ────────────────────→ Button �
 Avoid the pins reserved for the UART console (`GPIO43`/`GPIO44`), USB
 (`GPIO19`/`GPIO20`), and the SPI flash. If you change the pins, update them in
 `src/main.rs`.
-
----
 
 ## Requirements
 
@@ -96,8 +90,6 @@ charge-only and will never be recognised by the host — if `espflash` reports
 - A working Cargo mirror if you are behind a slow connection — `Cargo.lock` is
   gitignored, so the first build resolves the dependency versions itself.
 
----
-
 ## Configuration
 
 The firmware is configured by a TOML file that is read by `build.rs` at compile
@@ -129,8 +121,6 @@ This protects the passwords *at rest*. It does **not** protect them in transit:
 the control panel is served over plain HTTP, so anyone on the same network can
 sniff the credentials. Treat the panel as trustworthy only on a network you
 control.
-
----
 
 ## Building and flashing
 
@@ -169,8 +159,6 @@ build locally, and nothing to convert first.
 > the network and the accounts it was built with.
 
 [Releases]: https://github.com/SCU-Maker-Org/Ayachi-door-access/releases
-
----
 
 ## Usage
 
@@ -221,8 +209,6 @@ of the network.
 | `ayachinene.local` does not resolve | Check the environment of the tool you are using to open the address. |
 | Nothing on the panel, page loads | The device is fine; check the serial log |
 
----
-
 ## Project layout
 
 ```
@@ -244,16 +230,12 @@ never touch the relay pin; they send it requests through signals instead. That
 keeps the lock's state transitions serialised, so there is no way for two
 callers to fight over it.
 
----
-
 ## Known limitations
 
 - No OTA firmware updates yet. Flashing requires a USB connection.
 - No watchdog. A panic halts the device until it is power-cycled, and if it
   panics while the lock is released, the door stays unlocked.
 - HTTP Basic Auth over plain HTTP is only as private as the network it runs on.
-
----
 
 ## Credits
 
