@@ -166,6 +166,11 @@ build locally, and nothing to convert first.
 > The configuration is baked in at build time, so a prebuilt image is tied to
 > the network and the accounts it was built with.
 
+Each release also carries the matching ELF next to the image. It is not for
+flashing — flash the `.bin` — but it is what decodes the log stream and turns a
+panic backtrace into function names, and it only works paired with the image from
+the same release.
+
 [Releases]: https://github.com/SCU-Maker-Org/Ayachi-door-access/releases
 
 ## Environment variables
@@ -186,7 +191,8 @@ DEFMT_LOG=debug cargo run --release
 The stream itself is defmt-encoded: the device sends short references, and the
 mapping back to message text comes from the ELF. A plain serial monitor, which
 only dumps bytes, shows that as noise. `cargo run` hands the ELF to espflash,
-which decodes it; standalone, do the same:
+which decodes it; standalone, do the same (for a prebuilt image, the ELF attached
+to its release):
 
 ```bash
 espflash monitor --elf target/xtensa-esp32s3-none-elf/release/ayachi-door-access
