@@ -4,17 +4,28 @@
 #  Ayachi Door Access - server configuration TEMPLATE
 # ============================================================================
 #
-#  Copy this file to `server_config.toml` and fill in the blanks:
+#  A server config is shaped like this file - the same sections and field names -
+#  and every field is explained below.
 #
-#      cp server_config_template.toml server_config.toml
+#  We suggest naming yours `server_config.toml` and leaving it in the crate root:
+#  that is the path `.cargo/config.toml` supplies by default, so the build picks
+#  it up on its own, with no extra flag to remember. It is listed in .gitignore,
+#  so a checkout always builds against its own copy.
 #
-#  `server_config.toml` is listed in .gitignore - never commit it.
+#  Writing yours from this template, the least you have to do is fill in the
+#  Wi-Fi credentials - the one section marked [] - and add at least one account.
+#  `users.salt` and `users.rounds` are a decision rather than a box to fill in:
+#  read their comments before settling on values.
 #
-#  This file is read by `build.rs` at compile time. Everything in it ends up
-#  compiled into the firmware, EXCEPT the plaintext passwords, which are
+#  To build against a file somewhere else instead, name it in SERVER_CONFIG.
+#  Make sure that file contains TOML laid out like this template - build.rs
+#  parses it without looking at the name:
+#
+#      SERVER_CONFIG=your_path_to_server_config cargo run --release
+#
+#  The config is read by `build.rs` at compile time, and everything in it ends
+#  up compiled into the firmware, EXCEPT the plaintext passwords, which are
 #  replaced by PBKDF2 hashes before they reach the binary.
-#
-#  Settings marked [] MUST be filled in. The rest are sensible defaults.
 # ============================================================================
 
 
@@ -82,10 +93,11 @@ max_connections = 4
 # ---------------------------------------------------------------------------
 
 [users]
-# Salt mixed into every password before hashing. Any string works.
+# Salt mixed into every password before hashing. Any string works, but we suggest
+# picking your own: a value shared with every other build of this project is a
+# weaker one.
 #
-# ⚠️ Pick your own value. Once the firmware is built, changing this changes
-#    every generated hash, so all existing passwords stop working.
+# Changing it rewrites the generated password hashes.
 salt = "onani"
 
 # PBKDF2 iteration count. Higher = harder to brute-force the stored hashes,

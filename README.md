@@ -92,24 +92,32 @@ charge-only and will never be recognised by the host — if `espflash` reports
 
 ## Configuration
 
-The firmware is configured by a TOML file that is read by `build.rs` at compile
-time. Start from the template:
+The firmware is configured by a TOML file that `build.rs` reads at compile time.
+It has to be shaped like `server_config_template.toml` in the crate root — the
+same sections and field names — and that template is where every field is
+explained.
 
-```bash
-cp server_config_template.toml server_config.toml
-```
+We suggest naming it `server_config.toml` and leaving it in the crate root: that
+is the path `.cargo/config.toml` supplies by default, so the build picks it up on
+its own, with no extra flag to remember. It is listed in `.gitignore`, so a
+checkout always builds against your own copy. To build against a file of your own
+instead, see [Environment variables](#environment-variables) below.
 
-Then open `server_config.toml` and fill in, at minimum:
+Writing one from the template, the least you have to do is fill in the Wi-Fi
+credentials — the one section it marks `[]` — and add at least one account:
 
 - `wifi.ssid` and `wifi.password` — the network to join.
 - `users.signed` — at least one account for the control panel. See the comments
   in the template for the exact syntax; an empty list means nobody can log in.
-- `users.salt` — replace the placeholder with your own string.
 
-Every field has an explanatory comment in the template.
+Two more are a decision rather than a box to fill in:
 
-`server_config.toml` is listed in `.gitignore`, so a checkout always builds
-against your own copy.
+- `users.salt` — the template ships a placeholder; we suggest picking your own, so
+  that the value is not shared with every other build of this project. Changing
+  it rewrites the generated password hashes.
+- `users.rounds` — the PBKDF2 cost. Higher is harder to brute-force and slower to
+  log in, and with HTTP Basic Auth every request pays it. The value in the
+  template is a safe starting point; how far to push it is your call.
 
 ### How secrets are handled
 
@@ -159,6 +167,44 @@ build locally, and nothing to convert first.
 > the network and the accounts it was built with.
 
 [Releases]: https://github.com/SCU-Maker-Org/Ayachi-door-access/releases
+
+## Environment variables
+
+Both of the build's knobs live in `.cargo/config.toml`, and both are defaults: an
+environment variable of the same name overrides what is set there.
+
+### DEFMT_LOG
+
+The log filter, `info` by default. It is applied at **compile time** — messages
+below the level are not in the image at all — so changing it means rebuilding, not
+reconfiguring:
+
+```bash
+DEFMT_LOG=debug cargo run --release
+```
+
+The stream itself is defmt-encoded: the device sends short references, and the
+mapping back to message text comes from the ELF. A plain serial monitor, which
+only dumps bytes, shows that as noise. `cargo run` hands the ELF to espflash,
+which decodes it; standalone, do the same:
+
+```bash
+espflash monitor --elf target/xtensa-esp32s3-none-elf/release/ayachi-door-access
+```
+
+### SERVER_CONFIG
+
+Which config file `build.rs` reads; the default is `server_config.toml` in the
+crate root. To build against a file somewhere else:
+
+```bash
+SERVER_CONFIG=your_path_to_server_config cargo run --release
+```
+
+Make sure that file contains TOML laid out like the template — `build.rs` parses
+it without looking at the name. Relative paths resolve against the crate root, and
+switching files re-runs `build.rs`, so the firmware always carries the config you
+named.
 
 ## Usage
 
