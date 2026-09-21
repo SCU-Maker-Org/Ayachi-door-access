@@ -13,4 +13,6 @@ rustflags = [
 ]
 
 [env]
-DEFMT_LOG = "info"
+# Both are defaults: an environment variable of the same name takes precedence.
+DEFMT_LOG = "info"                    # firmware log filter (override: DEFMT_LOG=debug)
+SERVER_CONFIG = "server_config.toml"  # config read by build.rs - make sure it's TOML (override: SERVER_CONFIG=your_path_to_server_config)

@@ -5,12 +5,24 @@ use pbkdf2::pbkdf2_hmac_array;
 use serde::{Deserialize, Serialize};
 use std::{env, fs, path};
 
+const DEFAULT_CONFIG_PATH: &str = "server_config.toml";
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
 
     // server config
-    println!("cargo:rerun-if-changed=server_config.toml");
-    let config_file = fs::read_to_string("server_config.toml")?;
+    println!("cargo:rerun-if-env-changed=SERVER_CONFIG");
+
+    let config_file_path = env::var("SERVER_CONFIG").map_or_else(|error| {
+        println!("cargo:warning=Failed to read SERVER_CONFIG environment variable: {}, using default path: {}", error, DEFAULT_CONFIG_PATH);
+        DEFAULT_CONFIG_PATH.to_string()
+    }, |path| {
+        println!("Using server config: {}", path);
+        path
+    });
+    println!("cargo:rerun-if-changed={}", config_file_path);
+
+    let config_file = fs::read_to_string(config_file_path)?;
     let config = toml::from_str::<Config>(&config_file)?;
 
     let mut config_buffer = vec![
