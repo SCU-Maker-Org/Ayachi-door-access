@@ -9,7 +9,7 @@
 #
 #  We suggest naming yours `server_config.toml` and leaving it in the crate root:
 #  that is the path `.cargo/config.toml` supplies by default, so the build picks
-#  it up on its own, with no extra flag to remember. It is listed in .gitignore,
+#  it up on its own, with no extra flag to add. It is listed in .gitignore,
 #  so a checkout always builds against its own copy.
 #
 #  Writing yours from this template, the least you have to do is fill in the

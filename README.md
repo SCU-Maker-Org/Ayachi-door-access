@@ -99,9 +99,9 @@ explained.
 
 We suggest naming it `server_config.toml` and leaving it in the crate root: that
 is the path `.cargo/config.toml` supplies by default, so the build picks it up on
-its own, with no extra flag to remember. It is listed in `.gitignore`, so a
-checkout always builds against your own copy. To build against a file of your own
-instead, see [Environment variables](#environment-variables) below.
+its own, with no extra flag to add. It is listed in `.gitignore`, so a
+checkout always builds against your own copy. To build against a file somewhere
+else instead, see [Environment variables](#environment-variables) below.
 
 Writing one from the template, the least you have to do is fill in the Wi-Fi
 credentials — the one section it marks `[]` — and add at least one account:
