@@ -254,6 +254,10 @@ http://ayachinene.local/
 The browser will prompt for a username and password — use one of the accounts
 from `users.signed`.
 
+The pages are the only interface most people need. If you want to drive the
+device from a script, or debug it with `curl`, the endpoints are written down in
+[`docs/http-api.md`](docs/http-api.md).
+
 ### Control panel
 
 | Button | Effect |
@@ -333,6 +337,8 @@ assets/
 config/
 ├── server_config_template.toml   the configuration template
 └── memory_partitions.csv         the partition table (factory + 2 OTA slots)
+docs/
+└── http-api.md             the HTTP endpoints, for scripts and clients
 build.rs                    reads the config, generates constants
 ```
 
