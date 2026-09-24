@@ -1,4 +1,5 @@
 /target
+/sundries
 .idea/
 Cargo.lock
-server_config.toml
+config/server_config.toml

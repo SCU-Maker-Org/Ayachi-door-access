@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="/favicon.ico">
+<title>固件维护 · 门禁控制面板</title>
+<style>
+:root{
+  --bg:#f2f2f7; --card:#fff; --text:#1c1c1e; --muted:#8a8a8e;
+  --line:#e5e5ea; --accent:#007aff; --accent-ink:#fff;
+  --ok:#34c759; --idle:#8e8e93; --warn:#ff9500; --danger:#ff3b30;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#000; --card:#1c1c1e; --text:#f2f2f7; --muted:#8e8e93;
+    --line:#2c2c2e; --accent:#0a84ff; --accent-ink:#fff;
+    --ok:#30d158; --idle:#8e8e93; --warn:#ff9f0a; --danger:#ff453a;
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  min-height:100dvh; padding:24px 16px calc(24px + env(safe-area-inset-bottom));
+  background:var(--bg); color:var(--text);
+  font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",
+       "Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  display:flex; justify-content:center; align-items:flex-start;
+  -webkit-font-smoothing:antialiased;
+}
+main{width:100%; max-width:440px}
+
+header{margin-bottom:20px; padding:0 4px; text-align:center}
+.logo{display:block; width:72px; height:72px; margin:0 auto 10px; border-radius:18px}
+h1{font-size:24px; font-weight:700; letter-spacing:-.02em}
+.sub{margin-top:2px; font-size:13px; color:var(--muted)}
+
+.panel{
+  background:var(--card); border-radius:18px; padding:20px; margin-bottom:16px;
+  box-shadow:0 1px 3px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.06);
+}
+h2{font-size:15px; font-weight:600; margin-bottom:14px;
+   display:flex; align-items:center; gap:8px}
+
+/* ── 状态行 ── */
+.status{
+  display:flex; align-items:center; gap:10px;
+  padding:13px 14px; margin-bottom:14px;
+  background:var(--bg); border-radius:12px;
+  font-size:15px; color:var(--muted);
+}
+.dot{width:9px; height:9px; border-radius:50%; flex:none;
+     background:var(--idle); transition:background .25s}
+.status[data-kind="ok"]   .dot{background:var(--ok)}
+.status[data-kind="busy"] .dot{background:var(--accent); animation:pulse 1.4s ease-in-out infinite}
+.status[data-kind="warn"] .dot{background:var(--warn)}
+.status[data-kind="err"]  .dot{background:var(--danger)}
+@keyframes pulse{50%{opacity:.2}}
+.status .val{margin-left:auto; font-weight:600; color:var(--text)}
+
+/* ── 进度条：单一量级，用产品主色，不引入新的色彩体系 ── */
+.bar{height:8px; border-radius:4px; background:var(--bg); overflow:hidden; margin:4px 0 12px}
+.bar > i{display:block; height:100%; width:0; border-radius:4px;
+         background:var(--accent); transition:width .3s ease}
+.bar[data-kind="ok"]  > i{background:var(--ok)}
+.bar[data-kind="err"] > i{background:var(--danger)}
+
+/* ── key-value 行 ── */
+.rows{display:grid; gap:1px; background:var(--line); border-radius:12px; overflow:hidden}
+.rows > div{display:flex; gap:12px; padding:10px 14px; background:var(--card); font-size:14px}
+.rows > div > span:first-child{color:var(--muted); flex:none}
+.rows > div > span:last-child{margin-left:auto; text-align:right;
+                              font-variant-numeric:tabular-nums; word-break:break-all}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px}
+
+/* ── 徽章：图标+文字，不靠颜色单独表意 ── */
+.badge{display:inline-flex; align-items:center; gap:6px; padding:3px 10px;
+       border-radius:999px; background:var(--bg); font-size:13px; font-weight:600; color:var(--text)}
+.badge .dot{background:var(--idle)}
+.badge[data-kind="ok"]   .dot{background:var(--ok)}
+.badge[data-kind="warn"] .dot{background:var(--warn)}
+.badge[data-kind="err"]  .dot{background:var(--danger)}
+
+button{
+  width:100%; min-height:52px; padding:14px 16px; margin-top:4px;
+  font:inherit; font-weight:500; color:var(--text);
+  background:transparent; border:1.5px solid var(--line); border-radius:14px;
+  cursor:pointer; touch-action:manipulation;
+  -webkit-tap-highlight-color:transparent;
+  transition:transform .08s, background .15s, border-color .15s, opacity .15s;
+}
+button:active{transform:scale(.97)}
+button:hover:not(:disabled){background:color-mix(in srgb,var(--text) 5%,transparent)}
+button:disabled{opacity:.4; cursor:default; transform:none}
+.primary{min-height:60px; font-size:17px; font-weight:600;
+         color:var(--accent-ink); background:var(--accent); border-color:var(--accent)}
+.primary:hover:not(:disabled){filter:brightness(1.08)}
+.primary.busy{filter:brightness(.9)}
+
+input[type=file]{width:100%; font:inherit; font-size:14px; color:var(--muted);
+                 padding:12px; border:1.5px dashed var(--line); border-radius:14px;
+                 background:transparent; cursor:pointer}
+input[type=file]::file-selector-button{font:inherit; font-size:13px; margin-right:12px;
+        padding:8px 14px; border:0; border-radius:10px;
+        background:var(--bg); color:var(--text); cursor:pointer}
+
+.warn{margin-top:14px; padding:14px; border-radius:12px;
+      background:color-mix(in srgb,var(--warn) 12%,transparent);
+      border:1.5px solid color-mix(in srgb,var(--warn) 45%,transparent); font-size:14px}
+.warn label{display:flex; gap:10px; align-items:flex-start; cursor:pointer}
+.warn input{flex:none; margin-top:3px; width:18px; height:18px; accent-color:var(--warn)}
+.warn.err{background:color-mix(in srgb,var(--danger) 12%,transparent);
+          border-color:color-mix(in srgb,var(--danger) 45%,transparent)}
+.warn.ok{background:color-mix(in srgb,var(--ok) 12%,transparent);
+         border-color:color-mix(in srgb,var(--ok) 45%,transparent)}
+
+#msg,#actMsg{margin-top:12px; min-height:20px; font-size:13.5px;
+             color:var(--muted); text-align:center}
+#msg[data-kind="ok"],#actMsg[data-kind="ok"]{color:var(--ok)}
+#msg[data-kind="err"],#actMsg[data-kind="err"]{color:var(--danger)}
+.hint{margin-top:12px; font-size:12.5px; color:var(--muted); line-height:1.7}
+
+footer{margin-top:20px; padding:0 4px; font-size:12px; color:var(--muted);
+       text-align:center; line-height:1.7}
+footer a{color:var(--accent); text-decoration:none}
+footer a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<main>
+
+  <header>
+    <img class="logo" src="/logo" alt="" width="72" height="72">
+    <h1>固件维护</h1>
+    <div class="sub" id="host">&nbsp;</div>
+  </header>
+
+  <div class="panel">
+    <div class="status" id="phaseLine" data-kind="idle">
+      <span class="dot"></span>
+      <span>当前进度</span>
+      <span class="val" id="phase">读取中</span>
+    </div>
+    <div class="bar" id="barWrap"><i id="bar"></i></div>
+    <div class="rows">
+      <div><span>擦除</span><span id="erase">—</span></div>
+      <div><span>写入</span><span id="write">—</span></div>
+    </div>
+    <p class="hint" id="phaseHint"></p>
+  </div>
+
+  <div class="panel">
+    <h2>上传固件</h2>
+    <input type="file" id="file" accept=".bin,application/octet-stream">
+    <button class="primary" id="upload">写入备用分区</button>
+    <p id="msg"></p>
+    <p class="hint">
+      选的是 <b>app 分区镜像</b>（<span class="mono">.bin</span>，不是 ELF）。
+      上传过程会先擦除再写入，期间请勿断电。
+    </p>
+  </div>
+
+  <div class="panel" id="slotPanel" hidden>
+    <h2>备用分区 <span class="badge" id="slotBadge" data-kind="idle">
+      <span class="dot"></span><span id="slotState">—</span></span></h2>
+    <div class="rows" id="slotRows"></div>
+    <div class="warn" id="confirmBox" hidden>
+      <label><input type="checkbox" id="confirm"><span id="confirmText"></span></label>
+    </div>
+    <button class="primary" id="activate" disabled>切换到新固件并重启</button>
+    <p id="actMsg"></p>
+  </div>
+
+  <footer>
+    <a href="/">开门面板</a> ·
+    <a href="/system/">系统信息</a><br>
+    Han_feng · 2026
+  </footer>
+
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ────────────────────────────────────────────────────────────────
+     协议：服务端用 {:?} 直接打印，格式由下面两个手写 Debug 决定，
+     改动 src/ayachi_core/system.rs 的 impl Debug 就要改这里：
+       impl Debug for UploadProcess   (system.rs:538)
+       impl Debug for PartitionInfo   (system.rs:566)
+
+     进度行： <uploading>|<state>|<message>|[erase_cur, erase_total]|[write_cur, write_total]
+     槽信息： [Some(]<state>|<segment_count>|<entry_address>|<chip_id>|<hash_appended>|
+              <secure_version>|<version>|<project>|<time>|<date>|<sha256>|<digest_sha256>[)]
+     ──────────────────────────────────────────────────────────────── */
+
+  var SLOT_QUERY = 'next';          // PartitionSlot 是 #[serde(rename_all = "lowercase")]
+
+  var PHASE = {
+    Idle:'空闲', Received:'已接收', Erasing:'擦除中', Writing:'写入中',
+    Identifying:'校验中', Ready:'已完成', Failed:'失败'
+  };
+  // 能启动的状态 → 可激活；Unverified / Foreign 需要用户确认
+  var SLOT_STATE = {
+    Unavailable:{ text:'不可用', kind:'err',  activatable:false },
+    Empty:      { text:'空',     kind:'idle', activatable:false },
+    Unknown:    { text:'未知',   kind:'err',  activatable:false },
+    Broken:     { text:'损坏',   kind:'err',  activatable:false },
+    Unverified: { text:'未验证', kind:'warn', activatable:true, confirm:'unverified' },
+    Foreign:    { text:'外来固件', kind:'warn', activatable:true, confirm:'foreign' },
+    Available:  { text:'可用',   kind:'ok',   activatable:true }
+  };
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  var hostEl = $('host'), phaseLine = $('phaseLine'), phaseEl = $('phase'),
+      bar = $('bar'), barWrap = $('barWrap'), eraseEl = $('erase'), writeEl = $('write'),
+      phaseHint = $('phaseHint'), fileEl = $('file'), uploadBtn = $('upload'),
+      msgEl = $('msg'), slotPanel = $('slotPanel'), slotBadge = $('slotBadge'),
+      slotStateEl = $('slotState'), slotRows = $('slotRows'), confirmBox = $('confirmBox'),
+      confirmInput = $('confirm'), confirmText = $('confirmText'),
+      activateBtn = $('activate'), actMsgEl = $('actMsg');
+
+  hostEl.textContent = location.host;
+
+  function say(el, text, kind) {
+    el.textContent = text;
+    if (kind) { el.dataset.kind = kind; } else { delete el.dataset.kind; }
+  }
+
+  /* ── 解析 Debug 输出 ── */
+  function unwrapOption(s) {                    // "Some(x)" -> "x"；"None" -> null
+    if (s === undefined || s === null) { return null; }
+    s = String(s).trim();
+    if (s === 'None') { return null; }
+    var m = /^Some\(([\s\S]*)\)$/.exec(s);
+    return m ? m[1] : s;
+  }
+  function arrayOf(s) {                          // "[a, b]" -> ['a','b']；不是数组返回 null
+    var inner = unwrapOption(s);
+    if (inner === null) { return null; }
+    var m = /^\[([\s\S]*)\]$/.exec(inner.trim());
+    if (!m) { return null; }
+    return m[1].trim() === '' ? [] : m[1].split(',');
+  }
+  function bytes(s) {                            // "[48, 46]" -> Uint8Array
+    var items = arrayOf(s);
+    if (items === null) { return null; }
+    var out = new Uint8Array(items.length);
+    for (var i = 0; i < items.length; i++) { out[i] = parseInt(items[i], 10) & 0xff; }
+    return out;
+  }
+  function text(s) {                             // 字节数组 -> NUL 截断的可打印串
+    var b = bytes(s);
+    if (b === null) { return null; }
+    var out = '';
+    for (var i = 0; i < b.length && b[i] !== 0; i++) {
+      out += (b[i] >= 0x20 && b[i] < 0x7f) ? String.fromCharCode(b[i]) : '.';
+    }
+    return out;
+  }
+  function hex(s) {
+    var b = bytes(s);
+    if (b === null) { return null; }
+    var out = '';
+    for (var i = 0; i < b.length; i++) { out += ('0' + b[i].toString(16)).slice(-2); }
+    return out;
+  }
+  function num(s) {
+    var v = unwrapOption(s);
+    return v === null ? null : Number(v);
+  }
+  function pairOf(s) {                           // "[cur, total]" -> [cur, total]
+    var items = arrayOf(s);
+    if (items === null || items.length !== 2) { return null; }
+    return [parseInt(items[0], 10), parseInt(items[1], 10)];
+  }
+  function splitTopLevel(s, sep) {               // 不理会 [] 里面的分隔符
+    var out = [], depth = 0, cur = '';
+    for (var i = 0; i < s.length; i++) {
+      var c = s[i];
+      if (c === '[' || c === '(') { depth++; }
+      else if (c === ']' || c === ')') { depth--; }
+      if (c === sep && depth === 0) { out.push(cur); cur = ''; }
+      else { cur += c; }
+    }
+    out.push(cur);
+    return out;
+  }
+  function kib(n) {                              // 字节 -> KiB 字符串
+    return (n / 1024).toFixed(0) + ' KiB';
+  }
+
+  /* ── SHA-256（crypto.subtle 在 http 下不可用，所以自备一份） ── */
+  function rotr(x, n) { return (x >>> n) | (x << (32 - n)); }
+  var KS = [
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+  ];
+  function sha256(bytesArr) {
+    var H = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
+             0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+    var len = bytesArr.length;
+    var padded = (((len + 8) >> 6) + 1) << 6;
+    var m = new Uint8Array(padded);
+    m.set(bytesArr);
+    m[len] = 0x80;
+    var hi = Math.floor((len * 8) / 4294967296), lo = (len * 8) >>> 0;
+    m[padded - 8] = (hi >>> 24) & 0xff; m[padded - 7] = (hi >>> 16) & 0xff;
+    m[padded - 6] = (hi >>> 8) & 0xff;  m[padded - 5] = hi & 0xff;
+    m[padded - 4] = (lo >>> 24) & 0xff; m[padded - 3] = (lo >>> 16) & 0xff;
+    m[padded - 2] = (lo >>> 8) & 0xff;  m[padded - 1] = lo & 0xff;
+
+    var w = new Uint32Array(64);
+    for (var i = 0; i < padded; i += 64) {
+      for (var t = 0; t < 16; t++) {
+        w[t] = (m[i+t*4] << 24) | (m[i+t*4+1] << 16) | (m[i+t*4+2] << 8) | m[i+t*4+3];
+      }
+      for (t = 16; t < 64; t++) {
+        var s0 = rotr(w[t-15],7) ^ rotr(w[t-15],18) ^ (w[t-15] >>> 3);
+        var s1 = rotr(w[t-2],17) ^ rotr(w[t-2],19) ^ (w[t-2] >>> 10);
+        w[t] = (w[t-16] + s0 + w[t-7] + s1) >>> 0;
+      }
+      var a=H[0], b=H[1], c=H[2], d=H[3], e=H[4], f=H[5], g=H[6], h=H[7];
+      for (t = 0; t < 64; t++) {
+        var S1 = rotr(e,6) ^ rotr(e,11) ^ rotr(e,25);
+        var ch = (e & f) ^ (~e & g);
+        var t1 = (h + S1 + ch + KS[t] + w[t]) >>> 0;
+        var S0 = rotr(a,2) ^ rotr(a,13) ^ rotr(a,22);
+        var maj = (a & b) ^ (a & c) ^ (b & c);
+        var t2 = (S0 + maj) >>> 0;
+        h=g; g=f; f=e; e=(d+t1)>>>0; d=c; c=b; b=a; a=(t1+t2)>>>0;
+      }
+      H[0]=(H[0]+a)>>>0; H[1]=(H[1]+b)>>>0; H[2]=(H[2]+c)>>>0; H[3]=(H[3]+d)>>>0;
+      H[4]=(H[4]+e)>>>0; H[5]=(H[5]+f)>>>0; H[6]=(H[6]+g)>>>0; H[7]=(H[7]+h)>>>0;
+    }
+    var out = '';
+    for (i = 0; i < 8; i++) { out += ('0000000' + H[i].toString(16)).slice(-8); }
+    return out;
+  }
+
+  /* ── 页面状态 ── */
+  var lastPhase = null;      // 上一次的 UploadState，用来发现"刚跑完"
+  var lastFile = null;       // 用户选的文件，用来本地算摘要
+  var localDigest = null;    // 本地算出的镜像摘要
+  var slotInfo = null;       // 最近一次拿到的备用分区信息
+  var pollTimer = null;
+
+  /* ── 进度轮询 ── */
+  function refreshProgress() {
+    fetch('/system/progress', { cache: 'no-store' })
+      .then(function (r) {
+        if (r.status === 401) { throw new Error('401'); }
+        if (!r.ok) { throw new Error('HTTP ' + r.status); }
+        return r.text();
+      })
+      .then(function (body) {
+        renderProgress(body.trim());
+      })
+      .catch(function (e) {
+        phaseLine.dataset.kind = 'err';
+        phaseEl.textContent = e.message === '401' ? '需要重新登录' : '连不上';
+        phaseHint.textContent = e.message === '401'
+          ? '刷新页面重新输入密码。' : '设备可能正在重启。';
+      });
+  }
+
+  function renderProgress(line) {
+    var f = splitTopLevel(line, '|');
+    var uploading = null, i = 0;
+
+    // 倒计时期间维护层会把所有请求 303 到重启页，这里收到的是 HTML 而不是状态行
+    if (f.length < 4) {
+      phaseEl.textContent = '正在切换 / 重启中';
+      phaseLine.dataset.kind = 'busy';
+      phaseHint.textContent = '设备即将重启，页面会自己等它回来。';
+      return;
+    }
+
+    // 允许两种形态：带 uploading 位 / 不带（不带时无法区分"卡住"和"进行中"）
+    // 服务端用 {} 打印 bool，所以是 true / false
+    if (f.length === 5) { uploading = f[0].trim() === 'true'; i = 1; }
+
+    var state = f[i].trim();
+    var message = unwrapOption(f[i + 1]);
+    var eraseP = pairOf(f[i + 2]);
+    var writeP = pairOf(f[i + 3]);
+    var info = PHASE[state] || state;
+
+    var terminal = (state === 'Idle' || state === 'Ready' || state === 'Failed');
+    var stuck = (uploading === false && !terminal);
+
+    phaseEl.textContent = stuck ? (info + '（已中断）') : info;
+    phaseLine.dataset.kind = state === 'Failed' ? 'err'
+                           : state === 'Ready' ? 'ok'
+                           : terminal ? 'idle' : 'busy';
+
+    // 进度条：写入阶段为主，擦除阶段按擦除算
+    var cur = 0, total = 0;
+    if (state === 'Erasing' && eraseP) { cur = eraseP[0]; total = eraseP[1]; }
+    else if (writeP) { cur = writeP[0]; total = writeP[1]; }
+    var pct = total > 0 ? Math.min(100, Math.round(cur * 100 / total)) : 0;
+    bar.style.width = (state === 'Ready' ? 100 : pct) + '%';
+    barWrap.dataset.kind = state === 'Failed' ? 'err' : (state === 'Ready' ? 'ok' : '');
+
+    eraseEl.textContent = eraseP ? (kib(eraseP[0]) + ' / ' + kib(eraseP[1])) : '—';
+    writeEl.textContent = writeP ? (kib(writeP[0]) + ' / ' + kib(writeP[1])) : '—';
+
+    var hints = {
+      Received:   '已建立连接，准备擦除。',
+      Erasing:    '正在擦除备用分区，这一步最慢（会屏蔽中断，属正常）。',
+      Writing:    '正在写入，请勿断电、勿关页面。',
+      Identifying:'写入完成，正在读取回校验摘要。',
+      Ready:      '固件已写入并校验完成，可以在下面确认后切换。',
+      Failed:     message ? ('失败：' + message) : '固件不完整或校验不通过，未切换。',
+      Idle:       ''
+    };
+    phaseHint.textContent = stuck && message ? ('中断于「' + info + '」：' + message)
+                          : (hints[state] || '');
+
+    // 阶段从"进行中"跳到终态时，拉一次分区信息
+    if (state !== lastPhase && (state === 'Ready' || state === 'Failed')) { refreshSlot(); }
+    if (state !== lastPhase && (state === 'Idle' || state === 'Ready')) { refreshSlot(); }
+    lastPhase = state;
+  }
+
+  /* ── 备用分区信息 ── */
+  function refreshSlot() {
+    fetch('/system/status/?slot=' + SLOT_QUERY, { cache: 'no-store' })
+      .then(function (r) {
+        if (!r.ok) { throw new Error('HTTP ' + r.status); }
+        return r.text();
+      })
+      .then(function (body) {
+        var inner = unwrapOption(body.trim());
+        if (inner === null) { slotPanel.hidden = true; return; }
+        renderSlot(splitTopLevel(inner, '|'));
+      })
+      .catch(function () { /* 保持上一次显示 */ });
+  }
+
+  function addRow(label, value, mono) {
+    var div = document.createElement('div');
+    var k = document.createElement('span');
+    k.textContent = label;
+    var v = document.createElement('span');
+    if (mono) { v.className = 'mono'; }
+    v.textContent = value;
+    div.appendChild(k); div.appendChild(v);
+    slotRows.appendChild(div);
+  }
+
+  function renderSlot(f) {
+    slotPanel.hidden = false;
+    slotRows.textContent = '';
+
+    var state = f[0].trim();
+    var meta = SLOT_STATE[state] || { text: state, kind: 'idle', activatable: false };
+    slotStateEl.textContent = meta.text;
+    slotBadge.dataset.kind = meta.kind;
+
+    var append = addRow;
+    append('段数',        num(f[1]) === null ? '—' : String(num(f[1])));
+    var addr = num(f[2]);
+    append('入口地址',    addr === null ? '—' : ('0x' + addr.toString(16)));
+    append('芯片 ID',     num(f[3]) === null ? '—' : String(num(f[3])));
+    append('附加摘要',    unwrapOption(f[4]) === 'true' ? '有' : '无');
+    append('安全版本',    num(f[5]) === null ? '—' : String(num(f[5])));
+    append('版本',        text(f[6]) || '—');
+    append('项目',        text(f[7]) || '—');
+    append('编译时间',    (text(f[8]) || '—') + '  ' + (text(f[9]) || ''));
+    append('ELF 摘要',    hex(f[10]) || '—', true);
+    append('镜像摘要',    hex(f[11]) || '—', true);
+    slotInfo = {
+      state: state, meta: meta, hashAppended: unwrapOption(f[4]) === 'true',
+      digest: hex(f[11]), project: text(f[7]), version: text(f[6])
+    };
+    renderConclusion();
+  }
+
+  /* ── 结论 / 确认 ── */
+  function renderConclusion() {
+    confirmBox.hidden = true;
+    activateBtn.disabled = true;
+    say(actMsgEl, '');
+
+    if (!slotInfo) { return; }
+    var meta = slotInfo.meta;
+
+    if (!meta.activatable) {
+      confirmBox.hidden = false;
+      confirmBox.className = 'warn err';
+      confirmText.textContent = '这个分区里的内容不能拿去启动，请重新上传固件。';
+      return;
+    }
+    if (meta.kind === 'ok') {
+      confirmBox.hidden = false;
+      confirmBox.className = 'warn ok';
+      confirmText.textContent = '校验通过，是本项目的固件，可以直接切换。' + digestNote();
+      activateBtn.disabled = false;
+      return;
+    }
+
+    // 需要用户确认：未验证 / 外来固件
+    confirmBox.hidden = false;
+    confirmBox.className = 'warn';
+    var why = [];
+    if (meta.confirm === 'unverified') {
+      why.push('镜像没有附加摘要，板子无法校验内容。上下的「镜像摘要」是板子从 flash 读出来的，'
+             + '请和发布方给出的摘要核对。' + digestNote());
+    }
+    if (meta.confirm === 'foreign') {
+      why.push('这不是本项目（' + (slotInfo.project || '?') + '）的固件。'
+             + '切换并重启后会运行它，届时只能靠 USB 重新烧写才能恢复门禁功能。');
+    }
+    confirmText.textContent = why.join(' ') + ' 勾选左边方框后才能切换。';
+    confirmInput.checked = false;
+    activateBtn.disabled = true;      // 勾选后由 change 处理器放行
+  }
+
+  function digestNote() {
+    if (!localDigest) { return ''; }
+    if (localDigest === slotInfo.digest) { return ' 本地文件摘要与板子读回的一致。'; }
+    return ' ⚠ 本地文件摘要与板子读回的不一致，写入可能出错。';
+  }
+
+  /* ── 上传 ── */
+  function pickFile() {
+    lastFile = fileEl.files && fileEl.files[0] ? fileEl.files[0] : null;
+    localDigest = null;
+    if (lastFile) { say(msgEl, '已选择 ' + lastFile.name + '（' + kib(lastFile.size) + '）'); }
+    else { say(msgEl, ''); }
+  }
+
+  function computeLocalDigest() {
+    if (!lastFile) { return Promise.resolve(); }
+    return lastFile.arrayBuffer().then(function (buf) {
+      var all = new Uint8Array(buf);
+      // 镜像头的第 23 字节 = 有没有附加摘要；附加的 32 字节摘要本身不参与哈希
+      var hashLen = (all.length > 24 && all[23] !== 0) ? all.length - 32 : all.length;
+      if (hashLen <= 0) { return; }
+      localDigest = sha256(all.subarray(0, hashLen));
+    });
+  }
+
+  function upload() {
+    if (!lastFile) { say(msgEl, '请先选择 .bin 文件', 'err'); return; }
+    uploadBtn.disabled = true;
+    uploadBtn.classList.add('busy');
+    say(msgEl, '上传中…');
+
+    fetch('/system/upload', { method: 'POST', body: lastFile, cache: 'no-store' })
+      .then(function (r) {
+        return r.text().then(function (t) {
+          if (r.status === 401) { throw new Error('需要重新登录，请刷新页面'); }
+          if (!r.ok) { throw new Error(t.trim() || ('HTTP ' + r.status)); }
+          return t;
+        });
+      })
+      .then(function () {
+        say(msgEl, '写入完成，正在校验…', 'ok');
+        return computeLocalDigest();
+      })
+      .then(function () { refreshProgress(); refreshSlot(); })
+      .catch(function (e) { say(msgEl, '失败：' + e.message, 'err'); })
+      .finally(function () {
+        uploadBtn.disabled = false;
+        uploadBtn.classList.remove('busy');
+      });
+  }
+
+  /* ── 激活 ── */
+  function activate() {
+    if (!slotInfo || !slotInfo.meta.activatable) { return; }
+    if (slotInfo.meta.confirm && !confirmInput.checked) {
+      say(actMsgEl, '请先勾选上面的确认项', 'err');
+      return;
+    }
+
+    activateBtn.disabled = true;
+    say(actMsgEl, '正在切换…');
+
+    fetch('/system/activate', { method: 'POST', cache: 'no-store' })
+      .then(function (r) {
+        return r.text().then(function (t) {
+          if (r.status === 401) { throw new Error('需要重新登录，请刷新页面'); }
+          if (!r.ok) { throw new Error(t.trim() || ('HTTP ' + r.status)); }
+          return t;
+        });
+      })
+      .then(function () { location.href = '/system/resetting'; })
+      .catch(function (e) {
+        say(actMsgEl, '切换失败：' + e.message, 'err');
+        activateBtn.disabled = false;
+      });
+  }
+
+  /* ── 轮询控制（每个请求都要付一次 Basic-Auth PBKDF2，所以空闲时放慢） ── */
+  function pollDelay() {
+    var busy = (lastPhase === 'Received' || lastPhase === 'Erasing'
+             || lastPhase === 'Writing'  || lastPhase === 'Identifying');
+    return busy ? 1000 : 4000;
+  }
+  function pollOnce() {
+    refreshProgress();
+    pollTimer = setTimeout(pollOnce, pollDelay());
+  }
+  function startPolling() {
+    if (!pollTimer) { pollTimer = setTimeout(pollOnce, 1000); }
+  }
+  function stopPolling() {
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  }
+
+  fileEl.addEventListener('change', pickFile);
+  uploadBtn.addEventListener('click', upload);
+  activateBtn.addEventListener('click', activate);
+  confirmInput.addEventListener('change', function () {
+    if (slotInfo && slotInfo.meta.confirm) {
+      activateBtn.disabled = !confirmInput.checked;   // 确认项勾上才放行
+    }
+  });
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) { stopPolling(); }
+    else { startPolling(); refreshProgress(); refreshSlot(); }
+  });
+
+  refreshProgress();
+  refreshSlot();
+  startPolling();
+})();
+</script>
+</body>
+</html>

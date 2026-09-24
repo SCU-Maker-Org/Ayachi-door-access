@@ -1,8 +1,8 @@
 // Made by Han_feng
 
 use super::{HOSTNAME, NAME, PORT};
-use core::cell::Cell;
 use core::net::Ipv4Addr;
+use core::sync::atomic::{AtomicU32, Ordering};
 use edge_mdns::buf::VecBufAccess;
 use edge_mdns::domain::base::Ttl;
 use edge_mdns::host::{Host, Service, ServiceAnswers};
@@ -10,14 +10,13 @@ use edge_mdns::{HostAnswer, HostAnswers, HostAnswersMdnsHandler, MdnsError};
 use edge_nal::UdpSplit;
 use edge_nal_embassy::UdpBuffers;
 use embassy_net::{Ipv6Address, Stack};
-use embassy_sync::blocking_mutex::CriticalSectionMutex;
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::signal::Signal;
 use esp_hal::__macro_implementation::static_cell::StaticCell;
 
 // Structs
 pub struct MdnsAnswers {
-    ipv4: CriticalSectionMutex<Cell<Ipv4Addr>>,
+    ipv4: AtomicU32,
     signal: Signal<CriticalSectionRawMutex, ()>,
 }
 
@@ -28,13 +27,13 @@ static MDNS_ANSWERS: StaticCell<MdnsAnswers> = StaticCell::new();
 impl MdnsAnswers {
     pub fn init() -> &'static Self {
         MDNS_ANSWERS.init(MdnsAnswers {
-            ipv4: CriticalSectionMutex::new(Cell::new(Ipv4Addr::UNSPECIFIED)),
+            ipv4: AtomicU32::new(Ipv4Addr::UNSPECIFIED.into()),
             signal: Signal::new(),
         })
     }
 
     pub fn update_ipv4(&self, ipv4: Ipv4Addr) {
-        self.ipv4.lock(|ip| ip.set(ipv4));
+        self.ipv4.store(ipv4.into(), Ordering::Release);
         self.signal.signal(())
     }
 }
@@ -58,7 +57,7 @@ impl HostAnswers for &MdnsAnswers {
 
         let host = Host {
             hostname: HOSTNAME,
-            ipv4: self.ipv4.lock(|ip| ip.get()),
+            ipv4: self.ipv4.load(Ordering::Acquire).into(),
             ipv6: Ipv6Address::UNSPECIFIED,
             ttl: Ttl::from_secs(60),
         };

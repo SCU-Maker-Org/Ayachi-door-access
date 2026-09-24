@@ -5,7 +5,7 @@ target = "xtensa-esp32s3-none-elf"
 build-std = ["core", "alloc"]
 
 [target.xtensa-esp32s3-none-elf]
-runner = "espflash flash --monitor"
+runner = "espflash flash --monitor --partition-table config/memory_partitions.csv --target-app-partition origin"
 rustflags = [
     "-C", "link-arg=-Tlinkall.x",
     "-C", "link-arg=-Tdefmt.x",
@@ -14,5 +14,5 @@ rustflags = [
 
 [env]
 # Both are defaults: an environment variable of the same name takes precedence.
-DEFMT_LOG = "info"                    # firmware log filter (override: DEFMT_LOG=debug)
-SERVER_CONFIG = "server_config.toml"  # config read by build.rs - make sure it's TOML (override: SERVER_CONFIG=your_path_to_server_config)
+DEFMT_LOG = "info"                           # firmware log filter (override: DEFMT_LOG=debug)
+SERVER_CONFIG = "config/server_config.toml"  # config read by build.rs - make sure it's TOML (override: SERVER_CONFIG=your_path_to_server_config)

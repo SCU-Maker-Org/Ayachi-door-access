@@ -1,0 +1,7 @@
+# name,type,sub_type,offset,size,flags
+nvs,data,nvs,0x9000,0x6000,
+otadata,data,ota,0xf000,0x2000,
+phy_init,data,phy,0x11000,0x1000,
+origin,app,factory,0x20000,0x2a0000,
+app_1,app,ota_0,0x2c0000,0x2a0000,
+app_2,app,ota_1,0x560000,0x2a0000,

@@ -17,69 +17,62 @@ pub enum DoorState{
 }
 
 // Structs
-pub struct Door<'d>(CriticalSectionMutex<DoorRaw<'d>>);
+pub struct Door<'d> {
+    inner: CriticalSectionMutex<DoorRaw<'d>>,
+    pub open_signal: Signal<CriticalSectionRawMutex, ()>,
+    pub open_once_signal: Signal<CriticalSectionRawMutex, ()>,
+    pub lock_signal: Signal<CriticalSectionRawMutex, ()>,
+}
 
 struct DoorRaw<'d> {
     state: Cell<DoorState>,
     lock: RefCell<Output<'d>>,
 }
 
-pub struct DoorSignal {
-    pub open: Signal<CriticalSectionRawMutex, ()>,
-    pub open_once: Signal<CriticalSectionRawMutex, ()>,
-    pub lock: Signal<CriticalSectionRawMutex, ()>,
-}
-
 // Statics
 static DOOR: StaticCell<Door> = StaticCell::new();
-static DOOR_SIGNAL: StaticCell<DoorSignal> = StaticCell::new();
 
 // Impls
 impl<'d> Door<'d> {
-    pub fn init(lock: impl OutputPin + 'static) -> &'static Door<'static> {
-        DOOR.init(Door(CriticalSectionMutex::new(DoorRaw {
-            state: Cell::new(DoorState::Lock),
-            lock: RefCell::new(Output::new(lock, Level::Low, OutputConfig::default()))
-        })))
+    pub fn init(lock: impl OutputPin + 'static) -> &'static Self {
+        DOOR.init(Door {
+            inner: CriticalSectionMutex::new(DoorRaw {
+                state: Cell::new(DoorState::Lock),
+                lock: RefCell::new(Output::new(lock, Level::Low, OutputConfig::default()))
+            }),
+            open_signal: Signal::new(),
+            open_once_signal: Signal::new(),
+            lock_signal: Signal::new(),
+        })
     }
 
     pub fn status(&self) -> DoorState {
-        self.0.lock(|door| door.state.get())
+        self.inner.lock(|door| door.state.get())
     }
 
     fn open(&self) {
-        self.0.lock(|door| {
+        self.inner.lock(|door| {
             door.state.set(DoorState::Open);
             door.lock.borrow_mut().set_high();
         })
     }
 
     fn lock(&self) {
-        self.0.lock(|door| {
+        self.inner.lock(|door| {
             door.state.set(DoorState::Lock);
             door.lock.borrow_mut().set_low();
         })
     }
 }
 
-impl DoorSignal {
-    pub fn init() -> &'static DoorSignal {
-        DOOR_SIGNAL.init(DoorSignal {
-            open: Signal::new(),
-            open_once: Signal::new(),
-            lock: Signal::new(),
-        })
-    }
-}
-
 // Tasks
 #[embassy_executor::task]
-pub async fn door_task(door: &'static Door<'static>, signal: &'static DoorSignal) {
+pub async fn door_task(door: &'static Door<'static>) {
     'door: loop {
         match select3(
-            signal.open.wait(),
-            signal.open_once.wait(),
-            signal.lock.wait(),
+            door.open_signal.wait(),
+            door.open_once_signal.wait(),
+            door.lock_signal.wait(),
         ).await {
             Either3::First(_) => door.open(),
             Either3::Second(_) if door.status() == DoorState::Lock => {
@@ -87,9 +80,9 @@ pub async fn door_task(door: &'static Door<'static>, signal: &'static DoorSignal
 
                 loop {
                     match select3(
-                        signal.open.wait(),
-                        signal.open_once.wait(),
-                        embassy_time::with_timeout(embassy_time::Duration::from_millis(DOOR_OPEN_ONCE_DELAY), signal.lock.wait()),
+                        door.open_signal.wait(),
+                        door.open_once_signal.wait(),
+                        embassy_time::with_timeout(embassy_time::Duration::from_millis(DOOR_OPEN_ONCE_DELAY), door.lock_signal.wait()),
                     ).await {
                         Either3::First(_) => continue 'door,
                         Either3::Second(_) => continue,

@@ -18,8 +18,12 @@ physical button next to the door.
   browser on the same network.
 - **Physical button** — opens the door for a few seconds without touching the
   network at all.
-- **Fails safe** — the lock is controlled locally, so the door keeps working
-  even when the Wi-Fi is down or the server is unreachable.
+- **Firmware updates over Wi-Fi** — a maintenance page takes a new application
+  image, verifies what actually landed in the flash, and switches the device
+  over to it on the next boot. The running firmware is never written over, and
+  an image it cannot verify is refused unless you say so explicitly.
+- **Works without the network** — the lock is controlled locally, so the door
+  keeps working even when the Wi-Fi is down or the server is unreachable.
 - **Password protection** — the control panel is guarded by HTTP Basic Auth.
   Passwords are stored as PBKDF2 hashes, so the plaintext never reaches the
   device.
@@ -35,7 +39,7 @@ physical button next to the door.
 |---|---|
 | ESP32-S3 board | Developed against the ESP32-S3-WROOM-1 |
 | Relay module | Drives the lock |
-| Electric lock | 12 V fail-secure (locked when unpowered) recommended |
+| Electric lock | 12 V electric bolt, powered through the relay's normally-closed contact |
 | Momentary push button | Mounted outside the door |
 | Power supply | 5 V / 2 A or better — do not power it from a PC USB port |
 
@@ -49,6 +53,9 @@ GPIO5  ────────────────────→ Button �
 ```
 
 - `GPIO4` high → relay energised → lock released.
+- The bolt hangs on the relay's **normally-closed** contact, so it is powered —
+  and therefore holding — while the relay is idle. A power cut releases it: this
+  is not a fail-secure lock, and a power-free door is an open door.
 - `GPIO5` uses the chip's internal pull-up, so the button wires straight to GND
   and a press produces a falling edge. No external resistor is needed.
 
@@ -93,14 +100,13 @@ charge-only and will never be recognised by the host — if `espflash` reports
 ## Configuration
 
 The firmware is configured by a TOML file that `build.rs` reads at compile time.
-It has to be shaped like `server_config_template.toml` in the crate root — the
-same sections and field names — and that template is where every field is
-explained.
+It has to be shaped like `config/server_config_template.toml` — the same
+sections and field names — and that template is where every field is explained.
 
-We suggest naming it `server_config.toml` and leaving it in the crate root: that
-is the path `.cargo/config.toml` supplies by default, so the build picks it up on
-its own, with no extra flag to add. It is listed in `.gitignore`, so a
-checkout always builds against your own copy. To build against a file somewhere
+We suggest copying it to `config/server_config.toml`: that is the path
+`.cargo/config.toml` supplies by default, so the build picks it up on its own,
+with no extra flag to add. It is listed in `.gitignore`, so a checkout always
+builds against your own copy. To build against a file somewhere
 else instead, see [Environment variables](#environment-variables) below.
 
 Writing one from the template, the least you have to do is fill in the Wi-Fi
@@ -148,11 +154,19 @@ To build without flashing:
 cargo build --release
 ```
 
-If the serial port is not detected automatically, pass it explicitly:
+If the serial port is not detected automatically, pass it explicitly — and keep
+the partition-table flags:
 
 ```bash
-espflash flash --monitor --port COM5
+espflash flash --monitor --port COM5 \
+  --partition-table config/memory_partitions.csv --target-app-partition origin
 ```
+
+> **Always pass the partition table.** It is not baked into the image, so a bare
+> `espflash flash` writes its own default single-factory table over the one in
+> flash. That table has no second application slot, which silently takes
+> Wi-Fi updates away. `cargo run` already supplies both flags (they live in
+> `.cargo/config.toml`); only hand-written `espflash` commands have to add them.
 
 ### Using a prebuilt binary
 
@@ -165,6 +179,10 @@ build locally, and nothing to convert first.
 
 > The configuration is baked in at build time, so a prebuilt image is tied to
 > the network and the accounts it was built with.
+
+A released `.bin` is also what the maintenance page takes, so a device that
+already runs this firmware can be moved to a newer release over Wi-Fi, without
+a cable.
 
 Each release also carries the matching ELF next to the image. It is not for
 flashing — flash the `.bin` — but it is what decodes the log stream and turns a
@@ -200,8 +218,8 @@ espflash monitor --elf target/xtensa-esp32s3-none-elf/release/ayachi-door-access
 
 ### SERVER_CONFIG
 
-Which config file `build.rs` reads; the default is `server_config.toml` in the
-crate root. To build against a file somewhere else:
+Which config file `build.rs` reads; the default is `config/server_config.toml`.
+To build against a file somewhere else:
 
 ```bash
 SERVER_CONFIG=your_path_to_server_config cargo run --release
@@ -251,6 +269,36 @@ The status line at the top refreshes automatically.
 Pressing the button behaves like "Open once", and works regardless of the state
 of the network.
 
+### Firmware updates over Wi-Fi
+
+The device can replace its own application image. Start at `/system/maintenance`
+(the footer of the control panel links to it) and:
+
+1. **Upload** the application image — the `.bin` from a release, not the ELF.
+   The progress bar follows the erase and then the write; the page polls the
+   device, so it is fine to refresh or reopen it mid-upload.
+2. **Read what landed.** The device reads the image back out of the flash and
+   reports the version, project name, build time and digests it finds. If the
+   image carries an appended digest the device has already checked it; if it
+   does not, the page shows the digest it computed so you can compare it with
+   the one the release publishes.
+3. **Activate.** The device switches the boot slot, counts down a few seconds,
+   and reboots.
+
+Uploads always go into the *inactive* slot — the firmware that is running is
+never written over, and nothing is switched until you activate. If a new image
+fails the bootloader's own validation, the bootloader falls back to the factory
+slot (`origin`), so a refused image does not leave the device unusable.
+
+The page asks for an explicit confirmation before activating an image that is
+*not* one this project built, or one it could not verify — moving to either is
+not something the device can undo by itself. The page shown while it reboots,
+and the countdown it polls, are deliberately left unauthenticated so a reboot
+does not prompt for the password again.
+
+> **This feature is new.** It has been written but not yet exercised on real
+> hardware, so treat Wi-Fi updates as experimental for now.
+
 ### Troubleshooting
 
 | Symptom | Likely cause |
@@ -260,6 +308,8 @@ of the network.
 | Connected, but no IP | The access point is not handing out DHCP leases |
 | `ayachinene.local` does not resolve | Check the environment of the tool you are using to open the address. |
 | Nothing on the panel, page loads | The device is fine; check the serial log |
+| Upload refused, "not supported" | The partition table in flash has no second app slot — reflash with `--partition-table` |
+| Upload finishes but the image is `broken` | The file was not an application `.bin`, or it was truncated on the way |
 
 ## Project layout
 
@@ -271,10 +321,19 @@ src/
     ├── door.rs             door state machine and lock hardware
     ├── network.rs          Wi-Fi controller and the embassy-net stack
     ├── mdns.rs             mDNS responder
-    └── server.rs           HTTP routes and Basic Auth
-build.rs                    reads server_config.toml, generates constants
-index.html                  the control panel, compiled into the firmware
-server_config_template.toml the configuration template
+    ├── server.rs           HTTP routes, Basic Auth, request layers
+    ├── system.rs           flash partitions, OTA upload / activation
+    └── utils.rs            small helpers (stack strings, format helpers)
+assets/
+├── index.html              the control panel
+├── maintenance.html        the firmware update page
+├── system.html             partition and progress details
+├── resetting.html          shown while the device reboots
+└── pic/                    logo and favicon
+config/
+├── server_config_template.toml   the configuration template
+└── memory_partitions.csv         the partition table (factory + 2 OTA slots)
+build.rs                    reads the config, generates constants
 ```
 
 The lock is owned by a single task (`door_task`). Other parts of the firmware
@@ -282,9 +341,20 @@ never touch the relay pin; they send it requests through signals instead. That
 keeps the lock's state transitions serialised, so there is no way for two
 callers to fight over it.
 
+Updates follow the same shape: the HTTP handler only writes the image into the
+inactive slot, and a separate task (`system_task`) owns the switch-over and the
+reboot. That is what lets the browser finish its request before the device
+disappears.
+
 ## Known limitations
 
-- No OTA firmware updates yet. Flashing requires a USB connection.
+- Wi-Fi updates need the app-slot partition table. A board flashed with
+  `espflash`'s default table has a single application slot and cannot update
+  itself — see [Building and flashing](#building-and-flashing).
+- There is no rollback yet: the firmware does not confirm an activated image as
+  working, and the bootloader `espflash` ships has rollback disabled. An image
+  that boots but misbehaves — say, one that never gets on the network — has to be
+  replaced over USB.
 - No watchdog. A panic halts the device until it is power-cycled, and if it
   panics while the lock is released, the door stays unlocked.
 - HTTP Basic Auth over plain HTTP is only as private as the network it runs on.

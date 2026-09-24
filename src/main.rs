@@ -3,14 +3,17 @@
 #![no_std]
 #![no_main]
 #![feature(impl_trait_in_assoc_type)]
+extern crate alloc;
 
 pub mod ayachi_core;
 
-use ayachi_core::{MAX_CONNECTIONS, WIFI_PASSWORD, WIFI_RETRY_DELAY, WIFI_SSID, SpawnerExt};
-use ayachi_core::door::{Door, DoorSignal, door_task};
+use ayachi_core::{MAX_CONNECTIONS, WIFI_PASSWORD, WIFI_RETRY_DELAY, WIFI_SSID};
+use ayachi_core::door::{Door, door_task};
 use ayachi_core::mdns::{MdnsAnswers, mdns_task};
 use ayachi_core::network::{Network, network_task};
 use ayachi_core::server::{AyachiServer, server_task};
+use ayachi_core::system::{System, system_task};
+use ayachi_core::utils::SpawnerExt;
 use embassy_futures::select::{Either3, select3};
 use embassy_time::Timer;
 use esp_alloc as _;
@@ -34,16 +37,15 @@ async fn main(spawner: embassy_executor::Spawner) {
     esp_rtos::start(timer_group.timer0, peripherals.FROM_CPU_INTR0);
 
     let door = Door::init(peripherals.GPIO4);
-    let door_signal = DoorSignal::init();
 
-    if let Err(error) = spawner.spawn_task(door_task(door, door_signal)) {
+    if let Err(error) = spawner.spawn_task(door_task(door)) {
         defmt::error!("Failed to initialize door: {}", error);
         return;
     }
 
     let button = Input::new(peripherals.GPIO5, InputConfig::default().with_pull(Pull::Up));
 
-    if let Err(error) = spawner.spawn_task(button_task(button, door_signal)) {
+    if let Err(error) = spawner.spawn_task(button_task(button, door)) {
         defmt::error!("Failed to spawn button task: {}", error);
         return;
     }
@@ -68,8 +70,16 @@ async fn main(spawner: embassy_executor::Spawner) {
         return;
     }
 
+    let system = System::init(peripherals.FLASH).await;
+    
+    if let Err(error) = spawner.spawn_task(system_task(system)) {
+        defmt::error!("Failed to spawn system task: {}", error);
+        return;
+    }
+    
+    let server = AyachiServer::init(door, system);
     for _ in 0..MAX_CONNECTIONS {
-        if let Err(error) = spawner.spawn_task(server_task(AyachiServer{ door, door_signal }, network.stack)) {
+        if let Err(error) = spawner.spawn_task(server_task(server, network.stack)) {
             defmt::error!("Failed to spawn Ayachi server task: {}", error);
             return;
         }
@@ -125,11 +135,11 @@ async fn main(spawner: embassy_executor::Spawner) {
 }
 
 #[embassy_executor::task]
-async fn button_task(mut button: Input<'static>, signal: &'static DoorSignal) {
+async fn button_task(mut button: Input<'static>, door: &'static Door<'static>) {
     loop {
         button.wait_for_falling_edge().await;
 
-        signal.open_once.signal(());
+        door.open_once_signal.signal(());
 
         button.wait_for_high().await;
     }

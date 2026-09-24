@@ -5,7 +5,7 @@ use pbkdf2::pbkdf2_hmac_array;
 use serde::{Deserialize, Serialize};
 use std::{env, fs, path};
 
-const DEFAULT_CONFIG_PATH: &str = "server_config.toml";
+const DEFAULT_CONFIG_PATH: &str = "config/server_config.toml";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");

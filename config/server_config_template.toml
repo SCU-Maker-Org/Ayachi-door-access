@@ -85,6 +85,10 @@ retry_delay = 5000
 # Keep in mind that the network stack also needs sockets for DHCP, DNS and
 # mDNS - the firmware sizes its socket pool as `max_connections + 4`, so you
 # only need to change this number.
+#
+# Don't shrink this to save RAM: during a firmware update the browser holds one
+# connection open for the whole upload and another one to follow the progress,
+# so 1 would leave the page stuck at 0% until the upload finishes.
 max_connections = 4
 
 

@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="/favicon.ico">
+<title>系统信息 · 门禁控制面板</title>
+<style>
+:root{
+  --bg:#f2f2f7; --card:#fff; --text:#1c1c1e; --muted:#8a8a8e;
+  --line:#e5e5ea; --accent:#007aff; --accent-ink:#fff;
+  --ok:#34c759; --idle:#8e8e93; --warn:#ff9500; --danger:#ff3b30;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#000; --card:#1c1c1e; --text:#f2f2f7; --muted:#8e8e93;
+    --line:#2c2c2e; --accent:#0a84ff; --accent-ink:#fff;
+    --ok:#30d158; --idle:#8e8e93; --warn:#ff9f0a; --danger:#ff453a;
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  min-height:100dvh; padding:24px 16px calc(24px + env(safe-area-inset-bottom));
+  background:var(--bg); color:var(--text);
+  font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",
+       "Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  display:flex; justify-content:center; align-items:flex-start;
+  -webkit-font-smoothing:antialiased;
+}
+main{width:100%; max-width:480px}
+
+header{margin-bottom:20px; padding:0 4px; text-align:center}
+.logo{display:block; width:72px; height:72px; margin:0 auto 10px; border-radius:18px}
+h1{font-size:24px; font-weight:700; letter-spacing:-.02em}
+.sub{margin-top:2px; font-size:13px; color:var(--muted)}
+
+.panel{background:var(--card); border-radius:18px; padding:20px; margin-bottom:16px;
+       box-shadow:0 1px 3px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.06)}
+h2{font-size:15px; font-weight:600; margin-bottom:14px;
+   display:flex; align-items:center; gap:8px}
+h2 .role{margin-left:auto; font-size:12px; font-weight:400; color:var(--muted)}
+
+.status{display:flex; align-items:center; gap:10px; padding:13px 14px;
+        background:var(--bg); border-radius:12px; font-size:15px; color:var(--muted)}
+.dot{width:9px; height:9px; border-radius:50%; flex:none;
+     background:var(--idle); transition:background .25s}
+.status[data-kind="ok"]   .dot{background:var(--ok)}
+.status[data-kind="busy"] .dot{background:var(--accent); animation:pulse 1.4s ease-in-out infinite}
+.status[data-kind="warn"] .dot{background:var(--warn)}
+.status[data-kind="err"]  .dot{background:var(--danger)}
+@keyframes pulse{50%{opacity:.2}}
+.status .val{margin-left:auto; font-weight:600; color:var(--text)}
+.bar{height:8px; border-radius:4px; background:var(--bg); overflow:hidden; margin-top:12px}
+.bar > i{display:block; height:100%; width:0; border-radius:4px; background:var(--accent);
+         transition:width .3s ease}
+
+.rows{display:grid; gap:1px; background:var(--line); border-radius:12px; overflow:hidden}
+.rows > div{display:flex; gap:12px; padding:9px 14px; background:var(--card); font-size:14px}
+.rows > div > span:first-child{color:var(--muted); flex:none}
+.rows > div > span:last-child{margin-left:auto; text-align:right; word-break:break-all}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px}
+
+.badge{display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px;
+       background:var(--bg); font-size:13px; font-weight:600; color:var(--text)}
+.badge .dot{background:var(--idle)}
+.badge[data-kind="ok"]   .dot{background:var(--ok)}
+.badge[data-kind="warn"] .dot{background:var(--warn)}
+.badge[data-kind="err"]  .dot{background:var(--danger)}
+
+footer{margin-top:20px; padding:0 4px; font-size:12px; color:var(--muted);
+       text-align:center; line-height:1.7}
+footer a{color:var(--accent); text-decoration:none}
+footer a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<main>
+
+  <header>
+    <img class="logo" src="/logo" alt="" width="72" height="72">
+    <h1>系统信息</h1>
+    <div class="sub" id="host">&nbsp;</div>
+  </header>
+
+  <div class="panel">
+    <h2>上传 / 切换进度</h2>
+    <div class="status" id="phaseLine" data-kind="idle">
+      <span class="dot"></span>
+      <span>当前阶段</span>
+      <span class="val" id="phase">读取中</span>
+    </div>
+    <div class="bar"><i id="bar"></i></div>
+    <div class="rows" style="margin-top:12px">
+      <div><span>擦除</span><span id="erase">—</span></div>
+      <div><span>写入</span><span id="write">—</span></div>
+    </div>
+    <p class="sub" id="phaseHint" style="margin-top:10px; text-align:left"></p>
+  </div>
+
+  <div id="slots"></div>
+
+  <footer>
+    <a href="/system/maintenance">固件维护</a> ·
+    <a href="/">开门面板</a><br>
+    Han_feng · 2026
+  </footer>
+
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  /* 协议（和 maintenance.html 共用一套）：
+     progress  <uploading>|<state>|<message>|[erase_cur, erase_total]|[write_cur, write_total]
+     slot      <state>|<segment_count>|<entry_address>|<chip_id>|<hash_appended>|secure_version>|
+               <version>|<project>|<time>|<date>|<sha256>|<digest_sha256>
+     格式定义在 src/ayachi_core/system.rs 的 impl Debug（:538 / :566）。            */
+
+  var SLOTS = [
+    { key:'Factory', label:'origin（出厂分区）', role:'只读 · 不参与 OTA' },
+    { key:'Current', label:'当前运行',          role:'正在跑的就是它' },
+    { key:'Next',    label:'备用分区',           role:'OTA 的目标槽' }
+  ];
+
+  var PHASE = {
+    Idle:'空闲', Received:'已接收', Erasing:'擦除中', Writing:'写入中',
+    Identifying:'校验中', Ready:'已完成', Failed:'失败'
+  };
+  var SLOT_STATE = {
+    Unavailable:{ text:'不可用',   kind:'err'  },
+    Empty:      { text:'空',       kind:'idle' },
+    Unknown:    { text:'未知',     kind:'err'  },
+    Broken:     { text:'损坏',     kind:'err'  },
+    Unverified: { text:'未验证',   kind:'warn' },
+    Foreign:    { text:'外来固件', kind:'warn' },
+    Available:  { text:'可用',     kind:'ok'   }
+  };
+
+  var $ = function (id) { return document.getElementById(id); };
+  var slotsEl = $('slots'), phaseLine = $('phaseLine'), phaseEl = $('phase'),
+      bar = $('bar'), eraseEl = $('erase'), writeEl = $('write'), phaseHint = $('phaseHint');
+
+  $('host').textContent = location.host;
+
+  /* ── Debug 输出解析 ── */
+  function unwrapOption(s) {
+    if (s === undefined || s === null) { return null; }
+    s = String(s).trim();
+    if (s === 'None') { return null; }
+    var m = /^Some\(([\s\S]*)\)$/.exec(s);
+    return m ? m[1] : s;
+  }
+  function arrayOf(s) {
+    var inner = unwrapOption(s);
+    if (inner === null) { return null; }
+    var m = /^\[([\s\S]*)\]$/.exec(inner.trim());
+    if (!m) { return null; }
+    return m[1].trim() === '' ? [] : m[1].split(',');
+  }
+  function bytes(s) {
+    var items = arrayOf(s);
+    if (items === null) { return null; }
+    var out = new Uint8Array(items.length);
+    for (var i = 0; i < items.length; i++) { out[i] = parseInt(items[i], 10) & 0xff; }
+    return out;
+  }
+  function text(s) {
+    var b = bytes(s);
+    if (b === null) { return null; }
+    var out = '';
+    for (var i = 0; i < b.length && b[i] !== 0; i++) {
+      out += (b[i] >= 0x20 && b[i] < 0x7f) ? String.fromCharCode(b[i]) : '.';
+    }
+    return out;
+  }
+  function hex(s) {
+    var b = bytes(s);
+    if (b === null) { return null; }
+    var out = '';
+    for (var i = 0; i < b.length; i++) { out += ('0' + b[i].toString(16)).slice(-2); }
+    return out;
+  }
+  function num(s) { var v = unwrapOption(s); return v === null ? null : Number(v); }
+  function pairOf(s) {
+    var items = arrayOf(s);
+    if (items === null || items.length !== 2) { return null; }
+    return [parseInt(items[0], 10), parseInt(items[1], 10)];
+  }
+  function splitTopLevel(s, sep) {
+    var out = [], depth = 0, cur = '';
+    for (var i = 0; i < s.length; i++) {
+      var c = s[i];
+      if (c === '[' || c === '(') { depth++; }
+      else if (c === ']' || c === ')') { depth--; }
+      if (c === sep && depth === 0) { out.push(cur); cur = ''; }
+      else { cur += c; }
+    }
+    out.push(cur);
+    return out;
+  }
+  function kib(n) { return (n / 1024).toFixed(0) + ' KiB'; }
+
+  /* ── 进度 ── */
+  var lastState = null;
+
+  function refreshProgress() {
+    fetch('/system/progress', { cache: 'no-store' })
+      .then(function (r) {
+        if (r.status === 401) { throw new Error('401'); }
+        if (!r.ok) { throw new Error('HTTP ' + r.status); }
+        return r.text();
+      })
+      .then(function (body) { renderProgress(body.trim()); })
+      .catch(function (e) {
+        phaseLine.dataset.kind = 'err';
+        phaseEl.textContent = e.message === '401' ? '需要重新登录' : '连不上';
+      });
+  }
+
+  function renderProgress(line) {
+    var f = splitTopLevel(line, '|'), uploading = null, i = 0;
+
+    // 倒计时期间维护层会把所有请求 303 到重启页，这里收到的是 HTML 而不是状态行
+    if (f.length < 4) {
+      phaseEl.textContent = '正在切换 / 重启中';
+      phaseLine.dataset.kind = 'busy';
+      return;
+    }
+    // 服务端用 {} 打印 bool，所以是 true / false
+    if (f.length === 5) { uploading = f[0].trim() === 'true'; i = 1; }
+
+    var state = f[i].trim();
+    var message = unwrapOption(f[i + 1]);
+    var eraseP = pairOf(f[i + 2]);
+    var writeP = pairOf(f[i + 3]);
+    var terminal = (state === 'Idle' || state === 'Ready' || state === 'Failed');
+    var stuck = (uploading === false && !terminal);
+
+    phaseEl.textContent = stuck ? ((PHASE[state] || state) + '（已中断）') : (PHASE[state] || state);
+    phaseLine.dataset.kind = state === 'Failed' ? 'err'
+                           : state === 'Ready' ? 'ok'
+                           : terminal ? 'idle' : 'busy';
+
+    var cur = 0, total = 0;
+    if (state === 'Erasing' && eraseP) { cur = eraseP[0]; total = eraseP[1]; }
+    else if (writeP) { cur = writeP[0]; total = writeP[1]; }
+    bar.style.width = (state === 'Ready' ? 100
+                     : total > 0 ? Math.min(100, Math.round(cur * 100 / total)) : 0) + '%';
+
+    eraseEl.textContent = eraseP ? (kib(eraseP[0]) + ' / ' + kib(eraseP[1])) : '—';
+    writeEl.textContent = writeP ? (kib(writeP[0]) + ' / ' + kib(writeP[1])) : '—';
+    phaseHint.textContent = stuck && message ? ('中断原因：' + message)
+                          : (state === 'Failed' && !message ? '固件不完整或校验不通过。' : '');
+
+    // 上传/校验结束时只有 Next 会变，拉它一个就够
+    if (state !== lastState) { refreshNext(); }
+    lastState = state;
+  }
+
+  /* ── 三个槽 ── */
+  function refreshSlots() {
+    fetch('/system/status/all', { cache: 'no-store' })
+      .then(function (r) {
+        if (r.status === 401) { throw new Error('401'); }
+        if (!r.ok) { throw new Error('HTTP ' + r.status); }
+        return r.text();
+      })
+      .then(function (body) {
+        var inner = unwrapOption(body.trim());
+        if (inner === null) { return; }
+        var items = splitTopLevel(inner, ',');
+        for (var i = 0; i < SLOTS.length && i < items.length; i++) {
+          renderSlot(i, items[i].trim());
+        }
+      })
+      .catch(function () { /* 保留上一次 */ });
+  }
+
+  /* 只有 Next 会变：进页面拉一次全量，之后只拉它一个
+     （每个请求都要付一次 Basic-Auth PBKDF2，所以别一直拉三个） */
+  function refreshNext() {
+    fetch('/system/status/?slot=next', { cache: 'no-store' })
+      .then(function (r) {
+        if (r.status === 401) { throw new Error('401'); }
+        if (!r.ok) { throw new Error('HTTP ' + r.status); }
+        return r.text();
+      })
+      .then(function (body) {
+        var inner = unwrapOption(body.trim());
+        renderSlot(2, inner === null ? 'None' : inner);
+      })
+      .catch(function () { /* 保留上一次 */ });
+  }
+
+  function renderSlot(index, value) {
+    var slot = SLOTS[index];
+    var card = document.getElementById('slot-' + slot.key);
+    var state = 'Unavailable', f = null;
+
+    if (value !== 'None') {
+      f = splitTopLevel(unwrapOption(value) || value, '|');
+      state = f[0].trim();
+    }
+    var meta = SLOT_STATE[state] || { text: state, kind: 'idle' };
+
+    if (!card) {
+      card = document.createElement('div');
+      card.className = 'panel';
+      card.id = 'slot-' + slot.key;
+      card.innerHTML = '<h2><span class="title"></span><span class="role"></span>'
+                     + '<span class="badge"><span class="dot"></span><span class="badge-text"></span></span></h2>'
+                     + '<div class="rows"></div>';
+      card.querySelector('.title').textContent = slot.label;
+      card.querySelector('.role').textContent = slot.role;
+      slotsEl.appendChild(card);
+    }
+    card.querySelector('.badge').dataset.kind = meta.kind;
+    card.querySelector('.badge-text').textContent = meta.text;
+
+    var rows = card.querySelector('.rows');
+    rows.textContent = '';
+    if (!f) {
+      rows.appendChild(makeRow('内容', '（分区不存在或读不到）'));
+      return;
+    }
+    var addr = num(f[2]);
+    rows.appendChild(makeRow('版本',      text(f[6]) || '—'));
+    rows.appendChild(makeRow('项目',      text(f[7]) || '—'));
+    rows.appendChild(makeRow('编译时间',  (text(f[8]) || '—') + '  ' + (text(f[9]) || '')));
+    rows.appendChild(makeRow('安全版本',  num(f[5]) === null ? '—' : String(num(f[5]))));
+    rows.appendChild(makeRow('段数',      num(f[1]) === null ? '—' : String(num(f[1]))));
+    rows.appendChild(makeRow('入口地址',  addr === null ? '—' : ('0x' + addr.toString(16))));
+    rows.appendChild(makeRow('芯片 ID',   num(f[3]) === null ? '—' : String(num(f[3]))));
+    rows.appendChild(makeRow('附加摘要',  unwrapOption(f[4]) === 'true' ? '有' : '无'));
+    rows.appendChild(makeRow('ELF 摘要',  hex(f[10]) || '—', true));
+    rows.appendChild(makeRow('镜像摘要',  hex(f[11]) || '—', true));
+  }
+
+  function makeRow(label, value, mono) {
+    var div = document.createElement('div');
+    var k = document.createElement('span');
+    k.textContent = label;
+    var v = document.createElement('span');
+    if (mono) { v.className = 'mono'; }
+    v.textContent = value;
+    div.appendChild(k); div.appendChild(v);
+    return div;
+  }
+
+  refreshProgress();
+  refreshSlots();                        // 全量：只在进页面时拉一次
+  setInterval(refreshProgress, 2000);    // 进度：2 秒
+  setInterval(refreshNext, 10000);       // 之后只轮询 Next
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) { refreshProgress(); refreshNext(); }
+  });
+})();
+</script>
+</body>
+</html>

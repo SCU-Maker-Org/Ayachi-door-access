@@ -1,32 +1,62 @@
 // Made by Han_feng
 
 use super::{MAX_CONNECTIONS, NAME, PORT, ROUNDS, SALT, USERS, WWW_AUTHENTICATE};
-use super::door::{Door, DoorSignal, DoorState};
+use super::door::{Door, DoorState};
 use base64::Engine;
+use edge_nal::io::Read;
 use embassy_net::Stack;
+use esp_hal::__macro_implementation::static_cell::StaticCell;
 use pbkdf2::pbkdf2_hmac_array;
 use pbkdf2::sha2::Sha256;
-use picoserve::extract::{FromRequestParts, Query};
-use picoserve::request::RequestParts;
-use picoserve::response::{NoContent, Response, StatusCode};
-use picoserve::routing::{PathRouter, get};
-use picoserve::{AppBuilder, Router};
+use picoserve::extract::{FromRequest, FromRequestParts, Query};
+use picoserve::request::{RequestBody, RequestParts};
+use picoserve::response::{IntoResponse, NoContent, Redirect, Response, ResponseWriter, StatusCode};
+use picoserve::routing::{get, Layer, PathRouter, Next, post};
+use picoserve::{AppBuilder, ResponseSent, Router};
 use serde::Deserialize;
+use crate::ayachi_core::system::{PartitionSlot, System, SystemError};
+use crate::ayachi_core::utils::FixedString;
+
+// Types
+type AyachiApplication = Router<<AyachiServer as AppBuilder>::PathRouter>;
 
 // Structs
-pub struct AyachiServer{
-    pub door: &'static Door<'static>,
-    pub door_signal: &'static DoorSignal
+pub struct AyachiServer {
+    state: &'static AyachiServerState,
+}
+
+struct AyachiServerState {
+    door: &'static Door<'static>,
+    system: &'static System<'static>,
 }
 
 struct Authorizer;
+
+struct Uploader;
+
+struct MaintenanceLayer;
 
 #[derive(Deserialize)]
 struct SetOpenQuery {
     state: u8
 }
 
+#[derive(Deserialize)]
+struct PartitionInfoQuery {
+    slot: PartitionSlot
+}
+
+// Statics
+static AYACHI_APPLICATION: StaticCell<AyachiApplication> = StaticCell::new();
+static AYACHI_SERVER_STATE: StaticCell<AyachiServerState> = StaticCell::new();
+
 // Impls
+impl AyachiServer {
+    pub fn init(door: &'static Door<'static>, system: &'static System<'static>) -> &'static AyachiApplication {
+        AYACHI_APPLICATION.init(AyachiServer{ state: AYACHI_SERVER_STATE.init(AyachiServerState{ door, system }) }.build_app())
+    }
+}
+
 impl AppBuilder for AyachiServer {
     type PathRouter = impl PathRouter;
 
@@ -34,11 +64,19 @@ impl AppBuilder for AyachiServer {
         Router::new()
             .route("/ciallo", get(|| async { "Ciallo～(∠·ω< )⌒★" }))
             .route("/", get(|_: Authorizer| async {
-                Response::ok(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/index.html")))
+                Response::ok(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/index.html")))
                     .with_content_type("text/html; charset=utf-8")
             }))
+            .route("/logo", get(|| async {
+                Response::ok(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/pic/logo.webp")).as_slice())
+                    .with_content_type("image/webp")
+            }))
+            .route("/favicon.ico", get(|| async {
+                Response::ok(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/pic/favicon.ico")).as_slice())
+                    .with_content_type("image/x-icon")
+            }))
             .route("/status", get(|| async {
-                Response::ok(match self.door.status() {
+                Response::ok(match self.state.door.status() {
                     DoorState::Open => "open",
                     DoorState::Lock => "lock",
                 })
@@ -46,20 +84,62 @@ impl AppBuilder for AyachiServer {
             .route("/setopen", get(move |_: Authorizer, Query(query): Query<SetOpenQuery>| async move {
                 match query.state {
                     0 => {
-                        self.door_signal.lock.signal(());
+                        self.state.door.lock_signal.signal(());
                         (StatusCode::OK, "Door set to locked")
                     },
                     1 => {
-                        self.door_signal.open.signal(());
+                        self.state.door.open_signal.signal(());
                         (StatusCode::OK, "Door set to opened")
                     },
                     _ => (StatusCode::BAD_REQUEST, "Invalid state")
                 }
             }))
             .route("/open", get(|_: Authorizer| async {
-                self.door_signal.open_once.signal(());
+                self.state.door.open_once_signal.signal(());
                 "Successfully open door for once"
             }))
+            .nest("/system", Router::new()
+                .route("/", get(|_: Authorizer| async {
+                    Response::ok(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/system.html")))
+                        .with_content_type("text/html; charset=utf-8")
+                }))
+                .nest("/activate", Router::new()
+                    .route("/", post(|_: Authorizer| async {
+                        let message = FixedString::<100>::new();
+                        match self.state.system.activate_next() {
+                            Ok(_) => Response::ok(message.write_format("Activating")),
+                            Err(error) => Response::new(StatusCode::BAD_REQUEST, message.write_format(error))
+                        }
+                    }))
+                    .route("/countdown", get(|| async {
+                        FixedString::<15>::from(self.state.system.activate_countdown())
+                    }))
+                )
+                .nest("/status", Router::new()
+                    .route("/", get(move |_: Authorizer, Query(PartitionInfoQuery{ slot }): Query<PartitionInfoQuery>| async move {
+                        FixedString::<500>::from(self.state.system.get_partition_info(slot))
+                    }))
+                    .route("/all", get(|_: Authorizer| async {
+                        FixedString::<1500>::from(self.state.system.get_partition_infos())
+                    }))
+                )
+                .route("/resetting", get(|| async {
+                    Response::ok(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/resetting.html")))
+                        .with_content_type("text/html; charset=utf-8")
+                }))
+                .route("/progress", get(|_: Authorizer| async {
+                    FixedString::<100>::new().write_formats(format_args!("{}|{:?}", self.state.system.is_uploading(), self.state.system.get_process()))
+                }))
+                .route("/maintenance", get(|_: Authorizer| async {
+                    Response::ok(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/maintenance.html")))
+                        .with_content_type("text/html; charset=utf-8")
+                }))
+                .route("/upload", post(|_: Authorizer, _: Uploader| async {
+                    Response::ok("Upload successfully")
+                }))
+            )
+            .layer(MaintenanceLayer)
+            .with_state(self.state)
     }
 }
 
@@ -100,17 +180,47 @@ impl<'r, State> FromRequestParts<'r, State> for Authorizer {
     }
 }
 
+impl<'r> FromRequest<'r, AyachiServerState> for Uploader {
+    type Rejection = (StatusCode, FixedString<250>);
+
+    async fn from_request<R: Read>(state: &'r AyachiServerState, _: RequestParts<'r>, request_body: RequestBody<'r, R>) -> Result<Self, Self::Rejection> {
+        let content_length = request_body.content_length();
+        let mut reader = request_body.reader().with_different_timeout(embassy_time::Duration::from_secs(3600)); // It's impossible to upload such a huge file or just wait for almost one hour
+
+        match state.system.upload(content_length, async |buffer| {
+            reader.read(buffer).await.map_err(|_| SystemError::WriteFailure)
+        }).await {
+            Ok(_) => Ok(Uploader),
+            Err(error) => Err((StatusCode::BAD_REQUEST, error.into()))
+        }
+    }
+}
+
+impl<PathParameters> Layer<AyachiServerState, PathParameters> for MaintenanceLayer {
+    type NextState = AyachiServerState;
+    type NextPathParameters = PathParameters;
+
+    async fn call_layer<'a, R: Read + 'a, NextLayer: Next<'a, R, Self::NextState, Self::NextPathParameters>, W: ResponseWriter<Error=R::Error>>(&self, next: NextLayer, state: &AyachiServerState, path_parameters: PathParameters, request_parts: RequestParts<'_>, response_writer: W) -> Result<ResponseSent, W::Error> {
+        static MAINTENANCE_DEDICATED: &[&str] = &["/system/resetting", "/system/activate/countdown"];
+
+        match (state.system.activate_countdown().is_some(), MAINTENANCE_DEDICATED.iter().find_map(|&white| (request_parts.path() == white).then_some(())).is_some()) {
+            (true, false) => Redirect::to("/system/resetting").write_to(next.into_connection().await?, response_writer).await,
+            (false, true) => Redirect::to("/system/maintenance").write_to(next.into_connection().await?, response_writer).await,
+            _ => next.run(state, path_parameters, response_writer).await
+        }
+    }
+}
+
 // Tasks
 #[embassy_executor::task(pool_size = MAX_CONNECTIONS)]
-pub async fn server_task(server: AyachiServer, stack: Stack<'static>) {
+pub async fn server_task(server_app: &'static AyachiApplication, stack: Stack<'static>) {
     static SERVER_CONFIG: picoserve::Config = picoserve::Config::const_default();
-    let app = server.build_app();
 
     let mut http_buffer = [0; 2048];
     let mut rx_buffer = [0; 1024];
     let mut tx_buffer = [0; 1024];
 
-    picoserve::Server::new(&app, &SERVER_CONFIG, &mut http_buffer)
+    picoserve::Server::new(server_app, &SERVER_CONFIG, &mut http_buffer)
         .listen_and_serve(NAME, stack, PORT, &mut rx_buffer, &mut tx_buffer)
         .await;
 }

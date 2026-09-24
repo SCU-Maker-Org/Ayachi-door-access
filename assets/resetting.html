@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="/favicon.ico">
+<title>正在重启 · 门禁控制面板</title>
+<style>
+:root{
+  --bg:#f2f2f7; --card:#fff; --text:#1c1c1e; --muted:#8a8a8e;
+  --line:#e5e5ea; --accent:#007aff; --accent-ink:#fff;
+  --ok:#34c759; --idle:#8e8e93; --warn:#ff9500; --danger:#ff3b30;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#000; --card:#1c1c1e; --text:#f2f2f7; --muted:#8e8e93;
+    --line:#2c2c2e; --accent:#0a84ff; --accent-ink:#fff;
+    --ok:#30d158; --idle:#8e8e93; --warn:#ff9f0a; --danger:#ff453a;
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  min-height:100dvh; padding:24px 16px calc(24px + env(safe-area-inset-bottom));
+  background:var(--bg); color:var(--text);
+  font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",
+       "Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  display:flex; justify-content:center; align-items:center;
+  -webkit-font-smoothing:antialiased;
+}
+main{width:100%; max-width:400px; text-align:center}
+
+.logo{display:block; width:72px; height:72px; margin:0 auto 14px; border-radius:18px}
+h1{font-size:22px; font-weight:700; letter-spacing:-.02em}
+.sub{margin-top:6px; font-size:14px; color:var(--muted); line-height:1.7}
+
+.spin{
+  width:28px; height:28px; margin:22px auto 0;
+  border:3px solid var(--line); border-top-color:var(--accent);
+  border-radius:50%; animation:spin 1s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spin[hidden]{display:none}
+
+.panel{background:var(--card); border-radius:18px; padding:22px 20px; margin-top:22px;
+       box-shadow:0 1px 3px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.06); text-align:left}
+.panel h2{font-size:15px; font-weight:600; margin-bottom:10px}
+.panel p{font-size:14px; color:var(--muted); line-height:1.8}
+.panel ol{margin:8px 0 0 20px; font-size:14px; color:var(--muted); line-height:1.9}
+.panel[hidden]{display:none}
+
+a.btn{
+  display:block; margin-top:18px; padding:14px 16px;
+  font-size:15px; font-weight:600; color:var(--accent-ink);
+  background:var(--accent); border-radius:14px; text-decoration:none;
+}
+a.btn.ghost{color:var(--text); background:transparent; border:1.5px solid var(--line);
+            font-weight:500}
+
+footer{margin-top:22px; font-size:12px; color:var(--muted); line-height:1.7}
+footer a{color:var(--accent); text-decoration:none}
+</style>
+</head>
+<body>
+<main>
+
+  <img class="logo" src="/logo" alt="" width="72" height="72">
+  <h1 id="title">正在重启</h1>
+  <p class="sub" id="detail">固件已切换，设备将在几秒内重启。</p>
+  <div class="spin" id="spin"></div>
+
+  <div class="panel" id="stuck" hidden>
+    <h2>设备似乎没有重启</h2>
+    <p>切换指令已经下发，但设备仍然在线。可能是：</p>
+    <ol>
+      <li>重启还没到（最多等 5 秒）；</li>
+      <li>你要访问的其实是另一台设备；</li>
+      <li>切换没有真正写进 OTA 数据分区。</li>
+    </ol>
+    <a class="btn" href="/system/">回到系统信息</a>
+    <a class="btn ghost" href="/system/maintenance">回到固件维护</a>
+  </div>
+
+  <footer>
+    <a href="/system/">系统信息</a> ·
+    <a href="/">开门面板</a><br>
+    Han_feng · 2026
+  </footer>
+
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  var titleEl = document.getElementById('title'),
+      detailEl = document.getElementById('detail'),
+      spinEl = document.getElementById('spin'),
+      stuckEl = document.getElementById('stuck');
+
+  var wentDown = false;      // 设备掉线过（= 真的重启了）
+  var done = false;
+  var elapsed = 0;
+  var WAIT_DOWN_MS = 15000;  // 等它掉线的上限
+  var STEP = 800;
+
+  // 倒计时：/system/activate/countdown 返回 Some(n) / None，未鉴权，可以放心轮询
+  function readCountdown() {
+    fetch('/system/activate/countdown', { cache: 'no-store' })
+      .then(function (r) { return r.text(); })
+      .then(function (t) {
+        var m = /Some\((\d+)\)/.exec(t);
+        if (m && !wentDown) {
+          titleEl.textContent = '正在重启 · ' + m[1] + ' 秒';
+          detailEl.textContent = '固件已切换，倒计时结束后设备重启。';
+        }
+      })
+      .catch(function () { /* 重启期间失败是正常的 */ });
+  }
+
+  function poll() {
+    elapsed += STEP;
+    if (!wentDown) { readCountdown(); }
+
+    fetch('/status', { cache: 'no-store' })
+      .then(function (r) { return r.text(); })
+      .then(function (t) {
+        var body = t.trim();
+        // 重启后 /status 会回到 open / lock；重启前维护层可能把它重定向成 HTML
+        var alive = (body === 'open' || body === 'lock');
+
+        if (!alive) { return; }          // 还在重定向阶段，继续等
+
+        if (wentDown) {
+          titleEl.textContent = '已恢复';
+          detailEl.textContent = '设备回来了，正在跳转…';
+          spinEl.hidden = true;
+          location.replace('/system/');
+          return;
+        }
+        if (elapsed >= WAIT_DOWN_MS) {
+          spinEl.hidden = true;
+          titleEl.textContent = '等待超时';
+          detailEl.textContent = '';
+          stuckEl.hidden = false;
+          done = true;
+        }
+      })
+      .catch(function () {
+        // 连不上 = 正在重启
+        wentDown = true;
+        titleEl.textContent = '正在重启';
+        detailEl.textContent = '设备已断开，等它回来…';
+      });
+  }
+
+  var timer = setInterval(function () {
+    if (done) { clearInterval(timer); return; }
+    poll();
+  }, STEP);
+
+  poll();
+})();
+</script>
+</body>
+</html>

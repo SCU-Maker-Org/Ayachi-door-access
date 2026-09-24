@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
+<link rel="icon" href="/favicon.ico">
 <title>门禁控制面板</title>
 <style>
 :root{
@@ -30,6 +31,10 @@ body{
 main{width:100%; max-width:400px}
 
 header{margin-bottom:20px; padding:0 4px; text-align:center}
+.logo{
+  display:block; width:72px; height:72px;
+  margin:0 auto 10px; border-radius:18px;
+}
 h1{font-size:24px; font-weight:700; letter-spacing:-.02em}
 .sub{margin-top:2px; font-size:13px; color:var(--muted)}
 
@@ -102,6 +107,7 @@ footer a:hover{text-decoration:underline}
 <main>
 
   <header>
+    <img class="logo" src="/logo" alt="" width="72" height="72">
     <h1>门禁控制面板</h1>
     <div class="sub" id="host">&nbsp;</div>
   </header>
