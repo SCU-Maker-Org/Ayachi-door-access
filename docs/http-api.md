@@ -31,7 +31,7 @@ A failed login is `401` with the `WWW-Authenticate` header.
 
 The three commands only *ask* `door_task` to act, through signals, and reply
 immediately: the door may still be moving when the response arrives. Read
-`/status` if you need to know where it ended up.
+`/status` for the resulting state.
 
 ## Firmware
 
@@ -42,7 +42,7 @@ immediately: the door may still be moving when the response arrives. Read
 | GET | `/system/resetting` | no | shown while the device reboots (HTML) |
 | GET | `/system/progress` | yes | upload progress, one line — see below |
 | GET | `/system/status?slot=<slot>` | yes | one partition — see below |
-| GET | `/system/activate/countdown` | no | the remaining seconds, or `/` when no countdown is running |
+| GET | `/system/activate/countdown` | no | the remaining seconds while a countdown runs; otherwise redirected — see below |
 | POST | `/system/activate/` | yes | `Activating` (200), or `400` with the reason |
 | POST | `/system/upload` | yes | `Upload successfully` (200), or `400` with the reason |
 
@@ -81,8 +81,8 @@ data partition, so **anything that makes that partition unreadable looks exactly
 like "no second slot"** — including the case where it holds bytes that are
 neither erased nor a valid entry (a stale region left behind by an older
 partition table, for instance). If an upload is refused with `NotSupported` while
-the partition table clearly has two application slots, read `otadata` instead of
-reflashing.
+the partition table clearly has two application slots, inspect the OTA data
+partition rather than reflashing.
 
 The response only says the bytes were written. **Whether the result is usable is
 a separate question** — ask `/system/status?slot=next` afterwards.
@@ -94,8 +94,14 @@ reboots. It is deliberately a `POST`: it changes what the device will boot, and
 it cannot be undone from the network.
 
 `400` with a token is returned when there is nothing to activate
-(`OTA(NotSupported)` for no second slot, `OTA(InvalidImage)` when the slot holds
-something that cannot boot, `Uploading` while an upload is running).
+(`OTA(NotSupported)` for no second slot or an unreadable OTA data partition,
+`OTA(InvalidImage)` when the slot holds something that cannot boot, `Uploading`
+while an upload is running).
+
+One caveat, written out in the README's known limitations: activating a third
+time since the last USB flash is known to corrupt the OTA data partition (a
+defect in the crate this firmware builds its updates on). The device remains
+operational, but further uploads are refused until that partition is erased.
 
 ### Response formats
 
@@ -122,8 +128,8 @@ error names never contain one. Splitting on `|` is therefore always safe.
 - `uploading` — `true` or `false`. Without it, a state like `Writing` cannot be
   told apart from "stopped during the write".
 - `state` — `Idle`, `Received`, `Erasing`, `Writing`, `Identifying`, `Ready` or
-  `Failed`. Only the last two are final; anything else with `uploading=false`
-  means the upload died there.
+  `Failed`. Only the last two are final; anything else with `uploading=false` means the
+  upload terminated in that state.
 - `message` — `/` when the upload has no error, otherwise the error name, e.g.
   `OTA(NotSupported)`.
 - byte counts are decimal, in bytes.
@@ -137,11 +143,11 @@ error names never contain one. Splitting on `|` is therefore always safe.
 
 If the slot is not in the partition table at all, the whole body is `/`. A body
 that is not exactly 12 fields means the device's output buffer overflowed and the
-response was cut short — treat that as an error, never as partial data to act on.
+response was cut short: treat it as an error, not as partial data to act on.
 
 - `state` — `Unavailable`, `Empty`, `Unknown`, `Broken`, `Unverified`,
-  `Foreign` or `Available`. Only `Unverified`, `Foreign` and `Available` are
-  worth activating.
+  `Foreign` or `Available`. Only `Unverified`, `Foreign` and `Available` can be
+  activated.
 - `version`, `project`, `time` and `date` are plain ASCII text, printed up to the
   first NUL (they are NUL-padded in flash).
 - `hash_appended` is `1` or `0`; it says whether the image carries an appended
@@ -156,27 +162,35 @@ response was cut short — treat that as an error, never as partial data to act 
 
 A small layer sits in front of everything else:
 
-- While the activation countdown is running, **any** path other than the two
-  unauthenticated system paths above is answered with `303` to
-  `/system/resetting`. This is what lets a browser that is still on the panel
-  follow the reboot instead of showing an error.
-- When no countdown is running, a request for one of those two paths is answered
-  with `303` to `/system/maintenance` — the reboot page is only reachable during
-  a reboot, and the countdown endpoint only during the countdown.
+- While the activation countdown is running, every path other than these four is
+  answered with `303` to `/system/resetting`: `/system/resetting`,
+  `/system/activate/countdown`, `/logo` and `/favicon.ico`. The reboot page
+  needs its own two paths, and its two assets, to remain reachable while the
+  device is still answering; this is what lets a browser that is still on the
+  panel follow the reboot instead of showing an error.
+- When no countdown is running, a request for `/system/resetting` or
+  `/system/activate/countdown` is answered with `303` to `/system/`: the reboot
+  page is reachable only during a reboot, and the countdown endpoint only during
+  the countdown.
 
-A `303` is followed automatically by browsers and by `fetch`, and the bounced
-request never reaches its handler — yet the client sees the redirect target's
-`200`. **A client that only looks at the status code cannot tell "the handler
-ran" from "the request was bounced"**, so every request that changes state
+A `303` is followed automatically by browsers and by `fetch`, and the redirected
+request never reaches its handler, yet the client observes the target's `200`.
+**A client that inspects only the status code cannot distinguish "the handler
+ran" from "the request was redirected"**, so every request that changes state
 (`POST /system/upload`, `POST /system/activate/`, `GET /open`,
-`GET /setopen?state=…`) should check the response's `redirected` flag — or the
-final URL — before it reports success. A command issued during the countdown
-otherwise looks like it worked when it never ran.
+`GET /setopen?state=…`) should check the response's `redirected` flag, or the
+final URL, before reporting success: a command issued during the countdown
+otherwise appears to have succeeded although it never ran.
 
 ## Notes for clients
 
 - One request per connection, no keep-alive.
 - Authenticated endpoints cost a PBKDF2; a page that polls should stay at 1–2 s
   and then slow down.
+- While a countdown runs, everything is redirected to the reboot page. A client
+  that polls the countdown should treat that redirect as the "switch finished"
+  signal and **not follow it** into the reboot page: following costs a fresh
+  authenticated page on every poll (a PBKDF2 each time), which is sufficient to
+  slow the device down.
 - The panel works with a plain `curl -u user:pass`; nothing needs a session or a
   cookie.

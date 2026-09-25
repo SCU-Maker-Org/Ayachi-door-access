@@ -40,22 +40,6 @@ h1{font-size:22px; font-weight:700; letter-spacing:-.02em}
   border-radius:50%; animation:spin 1s linear infinite;
 }
 @keyframes spin{to{transform:rotate(360deg)}}
-.spin[hidden]{display:none}
-
-.panel{background:var(--card); border-radius:18px; padding:22px 20px; margin-top:22px;
-       box-shadow:0 1px 3px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.06); text-align:left}
-.panel h2{font-size:15px; font-weight:600; margin-bottom:10px}
-.panel p{font-size:14px; color:var(--muted); line-height:1.8}
-.panel ol{margin:8px 0 0 20px; font-size:14px; color:var(--muted); line-height:1.9}
-.panel[hidden]{display:none}
-
-a.btn{
-  display:block; margin-top:18px; padding:14px 16px;
-  font-size:15px; font-weight:600; color:var(--accent-ink);
-  background:var(--accent); border-radius:14px; text-decoration:none;
-}
-a.btn.ghost{color:var(--text); background:transparent; border:1.5px solid var(--line);
-            font-weight:500}
 
 footer{margin-top:22px; font-size:12px; color:var(--muted); line-height:1.7}
 footer a{color:var(--accent); text-decoration:none}
@@ -67,9 +51,6 @@ footer a{color:var(--accent); text-decoration:none}
   .logo{width:88px; height:88px; border-radius:22px}
   h1{font-size:28px}
   .sub{font-size:15px}
-  .panel{padding:26px; border-radius:22px}
-  .panel p, .panel ol{font-size:15px}
-  a.btn{font-size:16px; padding:16px}
   footer{font-size:13px}
 }
 </style>
@@ -82,22 +63,9 @@ footer a{color:var(--accent); text-decoration:none}
   <p class="sub" id="detail">固件已切换，设备将在几秒内重启。</p>
   <div class="spin" id="spin"></div>
 
-  <div class="panel" id="stuck" hidden>
-    <h2>设备似乎没有重启</h2>
-    <p>切换指令已经下发，但设备仍然在线。可能是：</p>
-    <ol>
-      <li>重启尚未发生（最多 5 秒）；</li>
-      <li>实际访问的是另一台设备；</li>
-      <li>切换未真正写入 OTA 数据分区。</li>
-    </ol>
-    <a class="btn" href="/system/">回到系统信息</a>
-    <a class="btn ghost" href="/system/maintenance">回到固件维护</a>
-  </div>
-
   <footer>
-    <a href="/system/">系统信息</a> ·
-    <a href="/system/maintenance">固件维护</a> ·
-    <a href="/">开门面板</a><br>
+    <a href="https://github.com/SCU-Maker-Org/Ayachi-door-access"
+       target="_blank" rel="noopener">GitHub</a><br>
     Han_feng · 2026
   </footer>
 
@@ -108,77 +76,55 @@ footer a{color:var(--accent); text-decoration:none}
   'use strict';
 
   var titleEl = document.getElementById('title'),
-      detailEl = document.getElementById('detail'),
-      spinEl = document.getElementById('spin'),
-      stuckEl = document.getElementById('stuck');
+      detailEl = document.getElementById('detail');
 
-  var wentDown = false;      // 设备掉线过（= 真的重启了）
-  var done = false;
-  var elapsed = 0;
-  var WAIT_DOWN_MS = 15000;  // 等它掉线的上限
   var STEP = 800;
+  var done = false;
 
-  // 倒计时：/system/activate/countdown 未鉴权，可以放心轮询。
-  // 响应体就是那个数字（没有倒计时在跑时是字面量 `/`）—— 走的是 Option 的
-  // CompactFormat，不是 Debug，所以没有 Some(...) 那层壳。
-  function readCountdown() {
-    fetch('/system/activate/countdown', { cache: 'no-store' })
-      .then(function (r) { return r.text(); })
-      .then(function (t) {
-        // 必须整条响应就是一个数字：倒计时结束后（或压根没在跑），维护层会把这条
-        // 请求 303 到 /system/maintenance，fetch 跟着跳过去拿回来的是 HTML —— 里面
-        // 有 "2026" 这种数字，用宽松的 /\d+/ 会显示成"正在重启 · 2026 秒"。
-        var m = /^\s*(\d+)\s*$/.exec(t);
-        if (m && !wentDown) {
-          titleEl.textContent = '正在重启 · ' + m[1] + ' 秒';
-          detailEl.textContent = '固件已切换，倒计时结束后设备重启。';
-        }
-      })
-      .catch(function () { /* 重启期间失败是正常的 */ });
+  function setWaiting() {
+    titleEl.textContent = '正在重启';
+    detailEl.textContent = '设备正在重启，等待恢复响应';
   }
 
+  /* 唯一的信号源就是 /system/activate/countdown（未鉴权、响应只是一个数字）：
+       - 整条响应是数字 → 倒计时还在跑（5…1）；读到 0 就进入"等待重启"
+       - 请求被重定向（r.redirected）→ 倒计时早结束了，而设备还在答话
+         = 它已经回来（或压根没重启）
+       - 请求失败或超时 → 设备正在重启，继续等
+     收尾交给服务端：倒计时一结束它就把这条路径 303 到 /system/，所以 reload
+     本页就等于"跟着那个 303 走"，落地在哪由服务端决定，这里不用知道。 */
   function poll() {
-    elapsed += STEP;
-    if (!wentDown) { readCountdown(); }
+    if (done) { return; }
 
-    fetch('/status', { cache: 'no-store' })
-      .then(function (r) { return r.text(); })
+    fetch('/system/activate/countdown', {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(3000),   // 设备掉线时把"挂住"变成"失败"
+    })
+      .then(function (r) {
+        if (r.redirected) { done = true; location.reload(); return null; }
+        return r.text();
+      })
       .then(function (t) {
-        var body = t.trim();
-        // 重启后 /status 会回到 open / lock；重启前维护层可能把它重定向成 HTML
-        var alive = (body === 'open' || body === 'lock');
-
-        if (!alive) { return; }          // 还在重定向阶段，继续等
-
-        if (wentDown) {
-          titleEl.textContent = '已恢复';
-          detailEl.textContent = '设备已恢复，正在跳转…';
-          spinEl.hidden = true;
-          location.replace('/system/');
-          return;
-        }
-        if (elapsed >= WAIT_DOWN_MS) {
-          spinEl.hidden = true;
-          titleEl.textContent = '等待超时';
-          detailEl.textContent = '';
-          stuckEl.hidden = false;
-          done = true;
+        if (t === null) { return; }              // 已经在跳转了
+        // 兜底：倒计时在跑时响应必定是纯数字，拿到别的就说明它已经不在跑了
+        // （比如服务端以后不再用 303 而是直接答 `/`）—— 设备能答话，就跟着回控制面板。
+        var m = /^\s*(\d+)\s*$/.exec(t);
+        if (!m) { done = true; location.reload(); return; }
+        var n = Number(m[1]);
+        if (n > 0) {
+          titleEl.textContent = '正在重启 · ' + n + ' 秒';
+          detailEl.textContent = '固件已切换，倒计时结束后设备重启。';
+        } else {
+          setWaiting();                          // 读到 0：倒计时结束，等它断电重启
         }
       })
-      .catch(function () {
-        // 连不上 = 正在重启
-        wentDown = true;
-        titleEl.textContent = '正在重启';
-        detailEl.textContent = '设备已断开，等待恢复…';
+      .catch(function () {                       // 连不上/超时 = 正在重启（正常路径）
+        setWaiting();
       });
   }
 
-  var timer = setInterval(function () {
-    if (done) { clearInterval(timer); return; }
-    poll();
-  }, STEP);
-
   poll();
+  setInterval(poll, STEP);   // 一直轮询，直到 303 把我们送回控制面板
 })();
 </script>
 </body>

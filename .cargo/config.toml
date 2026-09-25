@@ -5,7 +5,7 @@ target = "xtensa-esp32s3-none-elf"
 build-std = ["core", "alloc"]
 
 [target.xtensa-esp32s3-none-elf]
-runner = "espflash flash --monitor --partition-table config/memory_partitions.csv --target-app-partition origin"
+runner = "espflash flash --monitor --partition-table config/memory_partitions.csv --target-app-partition origin --erase-parts otadata"
 rustflags = [
     "-C", "link-arg=-Tlinkall.x",
     "-C", "link-arg=-Tdefmt.x",

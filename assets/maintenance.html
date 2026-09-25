@@ -213,7 +213,9 @@ footer a:hover{text-decoration:underline}
 
   <footer>
     <a href="/">开门面板</a> ·
-    <a href="/system/">系统信息</a><br>
+    <a href="/system/">系统信息</a> ·
+    <a href="https://github.com/SCU-Maker-Org/Ayachi-door-access"
+       target="_blank" rel="noopener">GitHub</a><br>
     Han_feng · 2026
   </footer>
 
@@ -542,7 +544,8 @@ footer a:hover{text-decoration:underline}
              + '须与发布方公布的摘要一致后方可继续。');
     }
     if (meta.confirm === 'foreign') {
-      why.push('这不是本项目（' + (slotInfo.project || '?') + '）的固件，切换后将运行来源不明的程序。'
+      why.push('此镜像不是由本项目构建的：其声明的项目名称为 ' + (slotInfo.project || '?') + '。'
+             + '切换后将运行来源不明的固件。'
              + '此操作不可逆：重启后仅能通过 USB 重新烧写恢复门禁功能。');
     }
     confirmText.textContent = why.join(' ') + ' 勾选左侧复选框后方可切换。';

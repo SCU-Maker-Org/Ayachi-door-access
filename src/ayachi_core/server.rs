@@ -197,12 +197,35 @@ impl<PathParameters> Layer<AyachiServerState, PathParameters> for MaintenanceLay
 
     async fn call_layer<'a, R: Read + 'a, NextLayer: Next<'a, R, Self::NextState, Self::NextPathParameters>, W: ResponseWriter<Error=R::Error>>(&self, next: NextLayer, state: &AyachiServerState, path_parameters: PathParameters, request_parts: RequestParts<'_>, response_writer: W) -> Result<ResponseSent, W::Error> {
         static MAINTENANCE_DEDICATED: &[&str] = &["/system/resetting", "/system/activate/countdown"];
+        static MAINTENANCE_WHITELIST: &[&str] = & const {
+            static WHITELIST_EXTENDED: &[&str] = &["/logo", "/favicon.ico"];
 
-        match (state.system.activate_countdown().is_some(), MAINTENANCE_DEDICATED.iter().find_map(|&white| (request_parts.path() == white).then_some(())).is_some()) {
-            (true, false) => Redirect::to("/system/resetting").write_to(next.into_connection().await?, response_writer).await,
-            (false, true) => Redirect::to("/system/maintenance").write_to(next.into_connection().await?, response_writer).await,
-            _ => next.run(state, path_parameters, response_writer).await
+            let mut array = [""; MAINTENANCE_DEDICATED.len() + WHITELIST_EXTENDED.len()];
+            let mut i = 0;
+            while i < MAINTENANCE_DEDICATED.len() {
+                array[i] = MAINTENANCE_DEDICATED[i];
+                i += 1;
+            }
+            i = 0;
+            while i < WHITELIST_EXTENDED.len() {
+                array[MAINTENANCE_DEDICATED.len() + i] = WHITELIST_EXTENDED[i];
+                i += 1;
+            }
+
+            array
+        };
+
+        let activating = state.system.activate_countdown().is_some();
+
+        if activating && MAINTENANCE_WHITELIST.iter().find_map(|&white| (request_parts.path() == white).then_some(())).is_none() {
+            return Redirect::to("/system/resetting").write_to(next.into_connection().await?, response_writer).await;
         }
+
+        if !activating && MAINTENANCE_DEDICATED.iter().find_map(|&white| (request_parts.path() == white).then_some(())).is_some() {
+            return Redirect::to("/system/").write_to(next.into_connection().await?, response_writer).await;
+        }
+
+        next.run(state, path_parameters, response_writer).await
     }
 }
 

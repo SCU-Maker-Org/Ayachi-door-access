@@ -89,6 +89,10 @@ retry_delay = 5000
 # Don't shrink this to save RAM: during a firmware update the browser holds one
 # connection open for the whole upload and another one to follow the progress,
 # so 1 would leave the page stuck at 0% until the upload finishes.
+#
+# Note too that every authenticated request costs a full PBKDF2 (see
+# `users.rounds` below), and the progress poll runs while the flash is being
+# erased and written - so polling harder makes an upload slower, not faster.
 max_connections = 4
 
 

@@ -1,6 +1,6 @@
 [package]
 name = "ayachi-door-access"
-version = "0.2.0-alpha"
+version = "0.2.0-beta"
 edition = "2024"
 authors = ["Han_feng"]
 

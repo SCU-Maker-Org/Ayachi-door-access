@@ -127,9 +127,6 @@ impl<'u> System<'u> {
 
         let next_type = OtaUpdater::new(&mut flash, &mut buffer).ok().and_then(|mut updater| updater.next_partition().map(|(_, next_type)| next_type).ok());
 
-        let mut result = OtaUpdater::new(&mut flash, &mut buffer).ok().unwrap();
-        defmt::info!("next: {:?}", result.next_partition());
-
         let (factory, current, next) = match read_partition_table(&mut flash, &mut buffer) {
             Ok(table) => (
                     table.find_partition(PartitionType::App(AppPartitionSubType::Factory)).ok().flatten(),
