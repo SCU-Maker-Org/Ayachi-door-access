@@ -41,17 +41,20 @@ immediately: the door may still be moving when the response arrives. Read
 | GET | `/system/maintenance` | yes | update page (HTML) |
 | GET | `/system/resetting` | no | shown while the device reboots (HTML) |
 | GET | `/system/progress` | yes | upload progress, one line — see below |
-| GET | `/system/status/?slot=<slot>` | yes | one partition — see below |
-| GET | `/system/status/all` | yes | three partitions, `factory`, `current`, `next` in that order |
-| GET | `/system/activate/countdown` | no | `Some(n)` while the reboot is counting down, `None` otherwise |
+| GET | `/system/status?slot=<slot>` | yes | one partition — see below |
+| GET | `/system/activate/countdown` | no | the remaining seconds, or `/` when no countdown is running |
 | POST | `/system/activate/` | yes | `Activating` (200), or `400` with the reason |
 | POST | `/system/upload` | yes | `Upload successfully` (200), or `400` with the reason |
 
 `<slot>` is `factory`, `current` or `next`, lowercase; it is required, and an
 unknown value never reaches the handler.
 
-The trailing slash on `/system/status/` and `/system/activate/` is optional:
-`/system/status?slot=next` is the same request as `/system/status/?slot=next`.
+**Paths are matched exactly, so a trailing slash is never optional.** The router
+matches a route only when the whole path has been consumed: `/system/status?slot=next`
+works, `/system/status/?slot=next` is a `404`. The one endpoint that *needs* the
+trailing slash is `POST /system/activate/` — it is registered as the root of a
+nested router, so `/system/activate/` is its entire path and `/system/activate`
+is a `404`.
 
 ### `POST /system/upload`
 
@@ -61,7 +64,8 @@ in `FlashStorage::WRITE_SIZE` multiples. The body read timeout is one hour, whic
 is far more than the upload needs but keeps a stalled client from pinning the
 device.
 
-Failures come back as `400` with a short token, e.g.:
+Failures come back as `400` with a short token — the name of the `SystemError`
+the upload ended with:
 
 | Token | Meaning |
 |---|---|
@@ -69,10 +73,19 @@ Failures come back as `400` with a short token, e.g.:
 | `OutOfMemory` | the image is larger than the target slot, or the stream ran long |
 | `Incomplete` | the stream ended before `Content-Length` bytes arrived |
 | `WriteFailure` | the connection failed while reading the body |
-| `OTA(Invalid)` | the partition table has no second application slot |
+| `OTA(NotSupported)` | there is nowhere to write: the partition table has no second application slot, **or** the OTA data partition could not be read (see the note below), or the flash refused the target |
+| `OTA(OutOfBounds)` / `OTA(WriteProtected)` / `OTA(StorageError)` | the erase or the write itself failed |
+
+`OTA(NotSupported)` deserves its own note: the target slot is chosen from the OTA
+data partition, so **anything that makes that partition unreadable looks exactly
+like "no second slot"** — including the case where it holds bytes that are
+neither erased nor a valid entry (a stale region left behind by an older
+partition table, for instance). If an upload is refused with `NotSupported` while
+the partition table clearly has two application slots, read `otadata` instead of
+reflashing.
 
 The response only says the bytes were written. **Whether the result is usable is
-a separate question** — ask `/system/status/?slot=next` afterwards.
+a separate question** — ask `/system/status?slot=next` afterwards.
 
 ### `POST /system/activate/`
 
@@ -86,15 +99,24 @@ something that cannot boot, `Uploading` while an upload is running).
 
 ### Response formats
 
-Three endpoints answer with Rust's `{:?}` of an internal struct, so the shape is
-that struct's `Debug` implementation — see `impl Debug for UploadProcess` and
-`impl Debug for PartitionInfo` in `src/ayachi_core/system.rs`. Fields are joined
-with `|`, in the order below.
+These endpoints answer with plain text assembled by the `impl CompactFormat`
+blocks in `src/ayachi_core/system.rs` (`UploadProcess`, `PartitionInfo`) plus the
+`Option`/array/text helpers in `src/ayachi_core/utils.rs`. Two conventions hold
+everywhere:
+
+- **a field with no value is the single character `/`** (that is an
+  `Option::None`, not an empty string);
+- **arrays are joined with `;` and carry no brackets** — `[u8; 32]` digests come
+  out as `240;185;24;…`, `[u32; 2]` byte counts as `0;0`.
+
+Fields are joined with `|`. No field can contain a `|`: the text helper replaces
+`|`, `/` and `;` inside `version`, `project`, `time` and `date` with `.`, and
+error names never contain one. Splitting on `|` is therefore always safe.
 
 **`/system/progress`**
 
 ```
-<uploading>|<state>|<message>|[erase_cur, erase_total]|[write_cur, write_total]
+<uploading>|<state>|<message>|erase_cur;erase_total|write_cur;write_total
 ```
 
 - `uploading` — `true` or `false`. Without it, a state like `Writing` cannot be
@@ -102,31 +124,33 @@ with `|`, in the order below.
 - `state` — `Idle`, `Received`, `Erasing`, `Writing`, `Identifying`, `Ready` or
   `Failed`. Only the last two are final; anything else with `uploading=false`
   means the upload died there.
-- `message` — `None`, or the error the upload ended with.
-- byte counts in decimal.
+- `message` — `/` when the upload has no error, otherwise the error name, e.g.
+  `OTA(NotSupported)`.
+- byte counts are decimal, in bytes.
 
-**`/system/status/?slot=<slot>` and `/system/status/all`**
+**`/system/status?slot=<slot>`**
 
 ```
 <state>|<segment_count>|<entry_address>|<chip_id>|<hash_appended>|<secure_version>| \
 <version>|<project>|<time>|<date>|<sha256>|<digest_sha256>
 ```
 
-The single-slot form is wrapped in `Some(...)` or `None`; the `/all` form is an
-array of three of those.
+If the slot is not in the partition table at all, the whole body is `/`. A body
+that is not exactly 12 fields means the device's output buffer overflowed and the
+response was cut short — treat that as an error, never as partial data to act on.
 
 - `state` — `Unavailable`, `Empty`, `Unknown`, `Broken`, `Unverified`,
   `Foreign` or `Available`. Only `Unverified`, `Foreign` and `Available` are
   worth activating.
-- `version`, `project`, `time` and `date` are NUL-padded ASCII as a decimal byte
-  array (`Some([48, 46, 49, 46, 48, 0, …])` for `"0.1.0"`).
+- `version`, `project`, `time` and `date` are plain ASCII text, printed up to the
+  first NUL (they are NUL-padded in flash).
+- `hash_appended` is `1` or `0`; it says whether the image carries an appended
+  digest. When it is `0` the device has nothing to verify the image against,
+  which is why those slots come back as `Unverified`.
 - `sha256` is the ELF digest recorded in the application descriptor;
-  `digest_sha256` is the digest of the image as it sits in flash. A client that
-  wants to check an upload can strip the last 32 bytes of the `.bin` when
-  `hash_appended` is true and hash that.
-- `hash_appended` says whether the image carries that appended digest. When it is
-  false the device has nothing to verify against, which is why those slots come
-  back as `Unverified`.
+  `digest_sha256` is the digest of the image as it sits in flash. Both are
+  decimal bytes joined with `;`. A client that wants to check an upload can strip
+  the last 32 bytes of the `.bin` when `hash_appended` is `1` and hash the rest.
 
 ## Redirects
 
@@ -139,6 +163,15 @@ A small layer sits in front of everything else:
 - When no countdown is running, a request for one of those two paths is answered
   with `303` to `/system/maintenance` — the reboot page is only reachable during
   a reboot, and the countdown endpoint only during the countdown.
+
+A `303` is followed automatically by browsers and by `fetch`, and the bounced
+request never reaches its handler — yet the client sees the redirect target's
+`200`. **A client that only looks at the status code cannot tell "the handler
+ran" from "the request was bounced"**, so every request that changes state
+(`POST /system/upload`, `POST /system/activate/`, `GET /open`,
+`GET /setopen?state=…`) should check the response's `redirected` flag — or the
+final URL — before it reports success. A command issued during the countdown
+otherwise looks like it worked when it never ran.
 
 ## Notes for clients
 

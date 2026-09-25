@@ -1,6 +1,7 @@
 // Made by Han_feng
 
-use super::utils::ContainerExt;
+use crate::stmt_join;
+use super::utils::{CompactFormat, TextBytes, ContainerExt};
 use core::cell::{Cell, RefCell};
 use core::fmt::{Debug, Formatter, Write};
 use core::ops::DerefMut;
@@ -20,7 +21,6 @@ use esp_hal::peripherals::FLASH;
 use esp_storage::FlashStorage;
 use pbkdf2::sha2::{Digest, Sha256};
 use serde::Deserialize;
-use crate::formats_args;
 
 // Enums
 #[derive(Copy, Clone, Debug, defmt::Format)]
@@ -105,10 +105,10 @@ pub struct PartitionInfo {
 
     // Application descriptor
     pub secure_version: Option<u32>,
-    pub version: Option<[u8; 32]>,
-    pub project: Option<[u8; 32]>,
-    pub time: Option<[u8; 16]>,
-    pub date: Option<[u8; 16]>,
+    pub version: Option<TextBytes<32>>,
+    pub project: Option<TextBytes<32>>,
+    pub time: Option<TextBytes<16>>,
+    pub date: Option<TextBytes<16>>,
     pub sha256: Option<[u8; 32]>,
 
     pub digest_sha256: Option<[u8; 32]>,
@@ -127,11 +127,14 @@ impl<'u> System<'u> {
 
         let next_type = OtaUpdater::new(&mut flash, &mut buffer).ok().and_then(|mut updater| updater.next_partition().map(|(_, next_type)| next_type).ok());
 
+        let mut result = OtaUpdater::new(&mut flash, &mut buffer).ok().unwrap();
+        defmt::info!("next: {:?}", result.next_partition());
+
         let (factory, current, next) = match read_partition_table(&mut flash, &mut buffer) {
             Ok(table) => (
-                table.find_partition(PartitionType::App(AppPartitionSubType::Factory)).ok().flatten(),
-                table.booted_partition().ok().flatten(),
-                next_type.map(|next_type| table.find_partition(PartitionType::App(next_type)).ok()).flatten().flatten()
+                    table.find_partition(PartitionType::App(AppPartitionSubType::Factory)).ok().flatten(),
+                    table.booted_partition().ok().flatten(),
+                    next_type.map(|next_type| table.find_partition(PartitionType::App(next_type)).ok()).flatten().flatten()
             ),
             Err(_) => (None, None, None),
         };
@@ -538,18 +541,20 @@ impl<'u> System<'u> {
     }
 }
 
-impl Debug for UploadProcess {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        self.state.fmt(f)?;
-        for attr_fmt in formats_args!("{:?}",
-            self.message,
-            self.erase,
-            self.write
-        ) {
-            f.write_char('|')?;
-            attr_fmt.fmt(f)?;
-        }
+impl CompactFormat for SystemError {
+    fn compact_format(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        self.fmt(f)
+    }
+}
 
+impl CompactFormat for UploadProcess {
+    fn compact_format(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        stmt_join!(f.write_char('|')?;
+            self.state.fmt(f)?;
+            self.message.compact_format(f)?;
+            self.erase.compact_format(f)?;
+            self.write.compact_format(f)?;
+        );
         Ok(())
     }
 }
@@ -566,26 +571,22 @@ impl PartitionInfo {
     }
 }
 
-impl Debug for PartitionInfo {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        self.state.fmt(f)?;
-        for attr_fmt in formats_args!("{:?}",
-            self.segment_count,
-            self.entry_address,
-            self.chip_id,
-            self.hash_appended,
-            self.secure_version,
-            self.version,
-            self.project,
-            self.time,
-            self.date,
-            self.sha256,
-            self.digest_sha256
-        ) {
-            f.write_char('|')?;
-            attr_fmt.fmt(f)?;
-        }
-
+impl CompactFormat for PartitionInfo {
+    fn compact_format(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        stmt_join!(f.write_char('|')?;
+            self.state.fmt(f)?;
+            self.segment_count.compact_format(f)?;
+            self.entry_address.compact_format(f)?;
+            self.chip_id.compact_format(f)?;
+            self.hash_appended.compact_format(f)?;
+            self.secure_version.compact_format(f)?;
+            self.version.compact_format(f)?;
+            self.project.compact_format(f)?;
+            self.time.compact_format(f)?;
+            self.date.compact_format(f)?;
+            self.sha256.compact_format(f)?;
+            self.digest_sha256.compact_format(f)?;
+        );
         Ok(())
     }
 }

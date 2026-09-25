@@ -15,7 +15,7 @@ use picoserve::routing::{get, Layer, PathRouter, Next, post};
 use picoserve::{AppBuilder, ResponseSent, Router};
 use serde::Deserialize;
 use crate::ayachi_core::system::{PartitionSlot, System, SystemError};
-use crate::ayachi_core::utils::FixedString;
+use crate::ayachi_core::utils::{CompactFormat, FixedString};
 
 // Types
 type AyachiApplication = Router<<AyachiServer as AppBuilder>::PathRouter>;
@@ -112,23 +112,18 @@ impl AppBuilder for AyachiServer {
                         }
                     }))
                     .route("/countdown", get(|| async {
-                        FixedString::<15>::from(self.state.system.activate_countdown())
+                        FixedString::<10>::from(self.state.system.activate_countdown().into_compact_format())
                     }))
                 )
-                .nest("/status", Router::new()
-                    .route("/", get(move |_: Authorizer, Query(PartitionInfoQuery{ slot }): Query<PartitionInfoQuery>| async move {
-                        FixedString::<500>::from(self.state.system.get_partition_info(slot))
-                    }))
-                    .route("/all", get(|_: Authorizer| async {
-                        FixedString::<1500>::from(self.state.system.get_partition_infos())
-                    }))
-                )
+                .route("/status", get(move |_: Authorizer, Query(PartitionInfoQuery{ slot }): Query<PartitionInfoQuery>| async move {
+                    FixedString::<410>::from(self.state.system.get_partition_info(slot).into_compact_format())
+                }))
                 .route("/resetting", get(|| async {
                     Response::ok(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/resetting.html")))
                         .with_content_type("text/html; charset=utf-8")
                 }))
                 .route("/progress", get(|_: Authorizer| async {
-                    FixedString::<100>::new().write_formats(format_args!("{}|{:?}", self.state.system.is_uploading(), self.state.system.get_process()))
+                    FixedString::<80>::new().write_formats(format_args!("{}|{:?}", self.state.system.is_uploading(), self.state.system.get_process().into_compact_format()))
                 }))
                 .route("/maintenance", get(|_: Authorizer| async {
                     Response::ok(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/maintenance.html")))

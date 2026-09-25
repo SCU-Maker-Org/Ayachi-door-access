@@ -37,9 +37,12 @@ h1{font-size:24px; font-weight:700; letter-spacing:-.02em}
 
 .panel{background:var(--card); border-radius:18px; padding:20px; margin-bottom:16px;
        box-shadow:0 1px 3px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.06)}
+/* 卡片头部固定两行：第一行 名称 + 状态徽章，第二行 用途说明。
+   这样三张卡的头部高度一致，不必靠压缩字数去凑对齐。 */
 h2{font-size:15px; font-weight:600; margin-bottom:14px;
-   display:flex; align-items:center; gap:8px}
-h2 .role{margin-left:auto; font-size:12px; font-weight:400; color:var(--muted)}
+   display:flex; align-items:center; flex-wrap:wrap; gap:4px 8px}
+h2 .badge{margin-left:auto}
+h2 .role{flex-basis:100%; font-size:12px; font-weight:400; color:var(--muted)}
 
 .status{display:flex; align-items:center; gap:10px; padding:13px 14px;
         background:var(--bg); border-radius:12px; font-size:15px; color:var(--muted)}
@@ -56,6 +59,19 @@ h2 .role{margin-left:auto; font-size:12px; font-weight:400; color:var(--muted)}
          transition:width .3s ease}
 
 .rows{display:grid; gap:1px; background:var(--line); border-radius:12px; overflow:hidden}
+.actions{display:grid; gap:8px; margin-top:12px}
+.actions:empty{margin-top:0}
+.actions.two{grid-template-columns:1fr 1fr}
+.actions button{width:100%; min-height:44px; padding:10px 16px;
+  font:inherit; font-size:14px; font-weight:500; color:var(--text);
+  background:transparent; border:1.5px solid var(--line); border-radius:12px;
+  cursor:pointer; touch-action:manipulation; -webkit-tap-highlight-color:transparent;
+  transition:transform .08s, background .15s, opacity .15s}
+.actions button:active{transform:scale(.98)}
+.actions button:hover:not(:disabled){background:color-mix(in srgb,var(--text) 5%,transparent)}
+.actions button:disabled{opacity:.4; cursor:default; transform:none}
+/* 「刷新」带上这个：设备侧刚跑完一次上传/校验，本地这份可能已经过期 */
+.actions button.stale{border-color:var(--accent); color:var(--accent)}
 .rows > div{display:flex; gap:12px; padding:9px 14px; background:var(--card); font-size:14px}
 .rows > div > span:first-child{color:var(--muted); flex:none}
 .rows > div > span:last-child{margin-left:auto; text-align:right; word-break:break-all}
@@ -68,10 +84,39 @@ h2 .role{margin-left:auto; font-size:12px; font-weight:400; color:var(--muted)}
 .badge[data-kind="warn"] .dot{background:var(--warn)}
 .badge[data-kind="err"]  .dot{background:var(--danger)}
 
+/* 页面之间的跳转：真链接，不用 JS */
+.nav{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px}
+a.btn{
+  display:flex; align-items:center; justify-content:center;
+  min-height:48px; padding:12px 16px;
+  font-weight:500; color:var(--text); text-decoration:none;
+  background:transparent; border:1.5px solid var(--line); border-radius:14px;
+  transition:background .15s;
+}
+a.btn:hover{background:color-mix(in srgb,var(--text) 5%,transparent)}
+
 footer{margin-top:20px; padding:0 4px; font-size:12px; color:var(--muted);
        text-align:center; line-height:1.7}
 footer a{color:var(--accent); text-decoration:none}
 footer a:hover{text-decoration:underline}
+
+/* ── 宽屏：三个槽卡并排（手机版仍是一列）── */
+@media (min-width:820px){
+  body{padding:40px 32px 56px; font-size:17px}
+  main{max-width:1120px}
+  .nav{max-width:560px; margin:0 auto 16px}
+  .logo{width:88px; height:88px; border-radius:22px}
+  h1{font-size:30px}
+  .sub{font-size:14px}
+  .panel{padding:26px; border-radius:22px}
+  h2{font-size:16px}
+  #slots{display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:16px}
+  #slots > .panel{margin-bottom:0}
+  .status{padding:15px 16px; font-size:16px}
+  .rows > div{font-size:15px; padding:11px 16px}
+  a.btn{min-height:52px; font-size:15px}
+  footer{font-size:13px}
+}
 </style>
 </head>
 <body>
@@ -82,6 +127,11 @@ footer a:hover{text-decoration:underline}
     <h1>系统信息</h1>
     <div class="sub" id="host">&nbsp;</div>
   </header>
+
+  <div class="nav">
+    <a class="btn" href="/">开门面板</a>
+    <a class="btn" href="/system/maintenance">固件维护</a>
+  </div>
 
   <div class="panel">
     <h2>上传 / 切换进度</h2>
@@ -112,16 +162,23 @@ footer a:hover{text-decoration:underline}
 (function () {
   'use strict';
 
-  /* 协议（和 maintenance.html 共用一套）：
-     progress  <uploading>|<state>|<message>|[erase_cur, erase_total]|[write_cur, write_total]
-     slot      <state>|<segment_count>|<entry_address>|<chip_id>|<hash_appended>|secure_version>|
+  /* 协议（和 maintenance.html 共用一套），定义在 src/ayachi_core/system.rs 的
+     impl CompactFormat（UploadProcess / SystemError / PartitionInfo）。
+     state 这个字段打的还是 Debug 的名字（Idle / Empty / Available），其余全走
+     CompactFormat：
+
+     progress  <uploading>|<state>|<message>|erase_cur;erase_total|write_cur;write_total
+     slot      <state>|<segment_count>|<entry_address>|<chip_id>|<hash_appended>|<secure_version>|
                <version>|<project>|<time>|<date>|<sha256>|<digest_sha256>
-     格式定义在 src/ayachi_core/system.rs 的 impl Debug（:538 / :566）。            */
+
+     两个约定：没有的字段（Option::None）是字面量 `/`；[T; N] 用 `;` 连、没有括号
+     （所以 sha256 是 `240;185;24;…` 这种十进制字节，hash_appended 是 1 / 0）。   */
 
   var SLOTS = [
-    { key:'Factory', label:'origin（出厂分区）', role:'只读 · 不参与 OTA' },
-    { key:'Current', label:'当前运行',          role:'正在跑的就是它' },
-    { key:'Next',    label:'备用分区',           role:'OTA 的目标槽' }
+    // key 必须是小写：PartitionSlot 是 #[serde(rename_all = "lowercase")] ✓
+    { key:'factory', label:'origin（出厂分区）', role:'USB 烧写位置 · 不参与 OTA' },
+    { key:'current', label:'当前运行',          role:'当前启动的分区' },
+    { key:'next',    label:'备用分区',           role:'下一次激活的目标分区' }
   ];
 
   var PHASE = {
@@ -144,63 +201,32 @@ footer a:hover{text-decoration:underline}
 
   $('host').textContent = location.host;
 
-  /* ── Debug 输出解析 ── */
-  function unwrapOption(s) {
-    if (s === undefined || s === null) { return null; }
-    s = String(s).trim();
-    if (s === 'None') { return null; }
-    var m = /^Some\(([\s\S]*)\)$/.exec(s);
-    return m ? m[1] : s;
+  /* ── 服务端输出的解析 ── */
+  /* 一个槽 = 一次 `/system/status?slot=` 请求 = 12 个 `|` 分隔的字段，
+     槽不存在时整个响应就是字面量 `/`。 */
+  function splitInfo(body) {
+    var s = str(body);
+    return s === '' ? null : s.split('|');
   }
-  function arrayOf(s) {
-    var inner = unwrapOption(s);
-    if (inner === null) { return null; }
-    var m = /^\[([\s\S]*)\]$/.exec(inner.trim());
-    if (!m) { return null; }
-    return m[1].trim() === '' ? [] : m[1].split(',');
+  /* `/` 就是"这个字段没有"（CompactFormat 的 Option::None）；顺带认一下旧版的 `None` */
+  function str(s)  { var v = (s === undefined || s === null) ? '' : String(s).trim(); return (v === '/' || v === 'None') ? '' : v; }
+  function dec(s)  { var v = str(s); return v === '' ? null : Number(v); }
+  function flag(s) { return str(s) === '1'; }
+  function hex(s)  {                                  // "78;40;201" → "4e28c9"
+    var v = str(s);
+    if (v === '') { return ''; }
+    return v.split(/[;,]/).map(function (b) {          // 你的 [T; N] 用 `;`（旧版用过 `,`）
+      return ('0' + (parseInt(b, 10) & 0xff).toString(16)).slice(-2);
+    }).join('');
   }
-  function bytes(s) {
-    var items = arrayOf(s);
-    if (items === null) { return null; }
-    var out = new Uint8Array(items.length);
-    for (var i = 0; i < items.length; i++) { out[i] = parseInt(items[i], 10) & 0xff; }
-    return out;
-  }
-  function text(s) {
-    var b = bytes(s);
-    if (b === null) { return null; }
-    var out = '';
-    for (var i = 0; i < b.length && b[i] !== 0; i++) {
-      out += (b[i] >= 0x20 && b[i] < 0x7f) ? String.fromCharCode(b[i]) : '.';
-    }
-    return out;
-  }
-  function hex(s) {
-    var b = bytes(s);
-    if (b === null) { return null; }
-    var out = '';
-    for (var i = 0; i < b.length; i++) { out += ('0' + b[i].toString(16)).slice(-2); }
-    return out;
-  }
-  function num(s) { var v = unwrapOption(s); return v === null ? null : Number(v); }
-  function pairOf(s) {
-    var items = arrayOf(s);
-    if (items === null || items.length !== 2) { return null; }
-    return [parseInt(items[0], 10), parseInt(items[1], 10)];
-  }
-  function splitTopLevel(s, sep) {
-    var out = [], depth = 0, cur = '';
-    for (var i = 0; i < s.length; i++) {
-      var c = s[i];
-      if (c === '[' || c === '(') { depth++; }
-      else if (c === ']' || c === ')') { depth--; }
-      if (c === sep && depth === 0) { out.push(cur); cur = ''; }
-      else { cur += c; }
-    }
-    out.push(cur);
-    return out;
+  function pairOf(s) {                              // `cur;total`（[u32; 2] 的 CompactFormat）
+    var items = str(s).split(';');
+    return items.length === 2 ? [Number(items[0]), Number(items[1])] : null;
   }
   function kib(n) { return (n / 1024).toFixed(0) + ' KiB'; }
+  /* 标着"这是设备给的 HTTP 错误"，用来和 fetch 自己的 reject（请求根本没到设备，
+     拿回来的是浏览器的 "Failed to fetch"）区分开：前者不该重试，后者该。 */
+  function httpError(message) { var e = new Error(message); e.http = true; return e; }
 
   /* ── 进度 ── */
   var lastState = null;
@@ -215,16 +241,17 @@ footer a:hover{text-decoration:underline}
       .then(function (body) { renderProgress(body.trim()); })
       .catch(function (e) {
         phaseLine.dataset.kind = 'err';
-        phaseEl.textContent = e.message === '401' ? '需要重新登录' : '连不上';
+        phaseEl.textContent = e.message === '401' ? '登录已失效' : '无法连接';
       });
   }
 
   function renderProgress(line) {
-    var f = splitTopLevel(line, '|'), uploading = null, i = 0;
+    // 直接切就行：字段里不会出现 `|`（文本字段把 `|` 换成了 `.`）
+    var f = line.split('|'), uploading = null, i = 0;
 
     // 倒计时期间维护层会把所有请求 303 到重启页，这里收到的是 HTML 而不是状态行
     if (f.length < 4) {
-      phaseEl.textContent = '正在切换 / 重启中';
+      phaseEl.textContent = '正在切换或重启';
       phaseLine.dataset.kind = 'busy';
       return;
     }
@@ -232,7 +259,7 @@ footer a:hover{text-decoration:underline}
     if (f.length === 5) { uploading = f[0].trim() === 'true'; i = 1; }
 
     var state = f[i].trim();
-    var message = unwrapOption(f[i + 1]);
+    var message = str(f[i + 1]);
     var eraseP = pairOf(f[i + 2]);
     var writeP = pairOf(f[i + 3]);
     var terminal = (state === 'Idle' || state === 'Ready' || state === 'Failed');
@@ -254,86 +281,166 @@ footer a:hover{text-decoration:underline}
     phaseHint.textContent = stuck && message ? ('中断原因：' + message)
                           : (state === 'Failed' && !message ? '固件不完整或校验不通过。' : '');
 
-    // 上传/校验结束时只有 Next 会变，拉它一个就够
-    if (state !== lastState) { refreshNext(); }
+    // 设备侧刚结束一次上传/校验 → 已经读过的 Next 卡可能过期了。
+    // 这里不发请求（分区信息只在你点击时才读），只给它打个标记。
+    if (state !== lastState && (state === 'Ready' || state === 'Failed')) { markStale(2); }
     lastState = state;
   }
 
-  /* ── 三个槽 ── */
-  function refreshSlots() {
-    fetch('/system/status/all', { cache: 'no-store' })
+  /* ── 三个槽：按需读取，进页面不发请求 ──────────────────────────────────
+     每张卡一开始只有一个「读取」按钮；读到的东西留在本地，点「详情」只做本地
+     展开/收起，要新数据就点「刷新」。这里没有任何定时器。 */
+  var slotData = [null, null, null];      // 每个槽最近一次拿到的 12 个字段
+
+  function loadSlot(index, attempt) {
+    var card = document.getElementById('slot-' + SLOTS[index].key);
+    setActions(card, index, 'busy');
+
+    fetch('/system/status?slot=' + SLOTS[index].key, { cache: 'no-store' })
       .then(function (r) {
-        if (r.status === 401) { throw new Error('401'); }
-        if (!r.ok) { throw new Error('HTTP ' + r.status); }
+        if (r.status === 401) { throw httpError('登录已失效，请刷新页面'); }
+        // 倒计时期间维护层把所有请求 303 到重启页，fetch 会跟着跳过去（拿到 200 + HTML）
+        if (r.redirected) { throw httpError('设备正在重启，请稍后重试'); }
+        if (!r.ok) { throw httpError('HTTP ' + r.status); }
         return r.text();
       })
-      .then(function (body) {
-        var inner = unwrapOption(body.trim());
-        if (inner === null) { return; }
-        var items = splitTopLevel(inner, ',');
-        for (var i = 0; i < SLOTS.length && i < items.length; i++) {
-          renderSlot(i, items[i].trim());
+      .then(function (body) { applySlot(index, body); })
+      .catch(function (e) {
+        // 请求根本没到设备（设备可能刚写完固件在恢复）→ 自动重试一次；HTTP 错误不重试
+        if (!e.http && attempt !== false) {
+          setTimeout(function () { loadSlot(index, false); }, 900);
+          return;
         }
-      })
-      .catch(function () { /* 保留上一次 */ });
+        failSlot(index, e.http ? e.message : '设备暂时没有响应，请点「重试」');
+      });
   }
 
-  /* 只有 Next 会变：进页面拉一次全量，之后只拉它一个
-     （每个请求都要付一次 Basic-Auth PBKDF2，所以别一直拉三个） */
-  function refreshNext() {
-    fetch('/system/status/?slot=next', { cache: 'no-store' })
-      .then(function (r) {
-        if (r.status === 401) { throw new Error('401'); }
-        if (!r.ok) { throw new Error('HTTP ' + r.status); }
-        return r.text();
-      })
-      .then(function (body) {
-        var inner = unwrapOption(body.trim());
-        renderSlot(2, inner === null ? 'None' : inner);
-      })
-      .catch(function () { /* 保留上一次 */ });
-  }
-
-  function renderSlot(index, value) {
-    var slot = SLOTS[index];
-    var card = document.getElementById('slot-' + slot.key);
-    var state = 'Unavailable', f = null;
-
-    if (value !== 'None') {
-      f = splitTopLevel(unwrapOption(value) || value, '|');
-      state = f[0].trim();
-    }
-    var meta = SLOT_STATE[state] || { text: state, kind: 'idle' };
-
-    if (!card) {
-      card = document.createElement('div');
-      card.className = 'panel';
-      card.id = 'slot-' + slot.key;
-      card.innerHTML = '<h2><span class="title"></span><span class="role"></span>'
-                     + '<span class="badge"><span class="dot"></span><span class="badge-text"></span></span></h2>'
-                     + '<div class="rows"></div>';
-      card.querySelector('.title').textContent = slot.label;
-      card.querySelector('.role').textContent = slot.role;
-      slotsEl.appendChild(card);
-    }
-    card.querySelector('.badge').dataset.kind = meta.kind;
-    card.querySelector('.badge-text').textContent = meta.text;
-
+  function failSlot(index, message) {
+    var card = document.getElementById('slot-' + SLOTS[index].key);
+    card.querySelector('.badge').dataset.kind = 'err';
+    card.querySelector('.badge-text').textContent = '读取失败';
     var rows = card.querySelector('.rows');
     rows.textContent = '';
-    if (!f) {
-      rows.appendChild(makeRow('内容', '（分区不存在或读不到）'));
+    rows.appendChild(makeRow('失败', message));
+    slotData[index] = null;
+    setActions(card, index, 'retry');
+  }
+
+  /* 设备侧刚跑完一次上传/校验：已经读过的那张卡内容可能变了。
+     不发请求，只在「刷新」按钮上做个标记，等你点。 */
+  function markStale(index) {
+    if (!slotData[index]) { return; }
+    var card = document.getElementById('slot-' + SLOTS[index].key);
+    card.dataset.stale = '1';
+    var refresh = card.querySelector('.actions button:last-child');
+    if (refresh && refresh.textContent === '刷新') {
+      refresh.classList.add('stale');
+      refresh.textContent = '刷新（内容有更新）';
+    }
+  }
+
+  function applySlot(index, body) {
+    var card = document.getElementById('slot-' + SLOTS[index].key);
+    var badge = card.querySelector('.badge'), badgeText = card.querySelector('.badge-text');
+    var rows = card.querySelector('.rows');
+    rows.textContent = '';
+    card.dataset.stale = '';
+
+    // 槽不存在：Option::None，整个响应就是 `/`
+    if (str(body) === '') {
+      badge.dataset.kind = 'idle';
+      badgeText.textContent = '不存在';
+      rows.appendChild(makeRow('内容', '（分区表中无此分区）'));
+      slotData[index] = null;
+      setActions(card, index, 'retry');
       return;
     }
-    var addr = num(f[2]);
-    rows.appendChild(makeRow('版本',      text(f[6]) || '—'));
-    rows.appendChild(makeRow('项目',      text(f[7]) || '—'));
-    rows.appendChild(makeRow('编译时间',  (text(f[8]) || '—') + '  ' + (text(f[9]) || '')));
-    rows.appendChild(makeRow('安全版本',  num(f[5]) === null ? '—' : String(num(f[5]))));
-    rows.appendChild(makeRow('段数',      num(f[1]) === null ? '—' : String(num(f[1]))));
+
+    var f = splitInfo(body);
+    if (f === null || f.length !== 12) {
+      badge.dataset.kind = 'err';
+      badgeText.textContent = '格式无法识别';
+      rows.appendChild(makeRow('字段数', String(f ? f.length : 0) + '（应为 12 个字段）'));
+      rows.appendChild(makeRow('响应开头', String(body).trim().slice(0, 120), true));
+      slotData[index] = null;
+      setActions(card, index, 'retry');
+      return;
+    }
+
+    var state = f[0].trim();
+    var meta = SLOT_STATE[state] || { text: state, kind: 'idle' };
+    badge.dataset.kind = meta.kind;
+    badgeText.textContent = meta.text;
+    slotData[index] = f;
+    rows.appendChild(makeRow('版本', str(f[6]) || '—'));
+    setActions(card, index, 'loaded');
+  }
+
+  /* mode：'load' 还没读过 / 'retry' 读失败或槽不存在 / 'busy' 正在读
+           'loaded' 手上有数据 → 两个按钮：详情（纯本地展开）+ 刷新（唯一发请求的那个） */
+  function setActions(card, index, mode) {
+    var box = card.querySelector('.actions');
+    box.textContent = '';
+    box.classList.toggle('two', mode === 'loaded');
+
+    if (mode === 'busy') {
+      var busy = makeButton('读取中…', function () {});
+      busy.disabled = true;
+      box.appendChild(busy);
+      return;
+    }
+    if (mode === 'load') {
+      box.appendChild(makeButton('读取', function () { loadSlot(index); }));
+      return;
+    }
+    if (mode === 'retry') {
+      box.appendChild(makeButton('重试', function () { loadSlot(index); }));
+      return;
+    }
+
+    var detail = makeButton('详情', function () { toggleDetail(index, detail); });
+    var refresh = makeButton('刷新', function () { loadSlot(index); });
+    if (card.dataset.stale === '1') {
+      refresh.classList.add('stale');
+      refresh.textContent = '刷新（内容有更新）';
+    }
+    box.appendChild(detail);
+    box.appendChild(refresh);
+  }
+
+  function makeButton(text, onclick) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = text;
+    btn.addEventListener('click', onclick);
+    return btn;
+  }
+
+  function toggleDetail(index, btn) {
+    var rows = document.getElementById('slot-' + SLOTS[index].key).querySelector('.rows');
+    rows.textContent = '';
+
+    if (btn.dataset.open === '1') {                         // 收起（本地，不发请求）
+      btn.dataset.open = '';
+      btn.textContent = '详情';
+      rows.appendChild(makeRow('版本', str(slotData[index][6]) || '—'));
+      return;
+    }
+    fillRows(rows, slotData[index]);
+    btn.dataset.open = '1';
+    btn.textContent = '收起';
+  }
+
+  function fillRows(rows, f) {
+    var addr = dec(f[2]);
+    rows.appendChild(makeRow('版本',      str(f[6]) || '—'));
+    rows.appendChild(makeRow('项目',      str(f[7]) || '—'));
+    rows.appendChild(makeRow('编译时间',  ((str(f[8]) + '  ' + str(f[9])).trim()) || '—'));
+    rows.appendChild(makeRow('安全版本',  dec(f[5]) === null ? '—' : String(dec(f[5]))));
+    rows.appendChild(makeRow('段数',      dec(f[1]) === null ? '—' : String(dec(f[1]))));
     rows.appendChild(makeRow('入口地址',  addr === null ? '—' : ('0x' + addr.toString(16))));
-    rows.appendChild(makeRow('芯片 ID',   num(f[3]) === null ? '—' : String(num(f[3]))));
-    rows.appendChild(makeRow('附加摘要',  unwrapOption(f[4]) === 'true' ? '有' : '无'));
+    rows.appendChild(makeRow('芯片 ID',   dec(f[3]) === null ? '—' : String(dec(f[3]))));
+    rows.appendChild(makeRow('附加摘要',  str(f[4]) === '' ? '—' : (flag(f[4]) ? '有' : '无')));
     rows.appendChild(makeRow('ELF 摘要',  hex(f[10]) || '—', true));
     rows.appendChild(makeRow('镜像摘要',  hex(f[11]) || '—', true));
   }
@@ -349,12 +456,33 @@ footer a:hover{text-decoration:underline}
     return div;
   }
 
-  refreshProgress();
-  refreshSlots();                        // 全量：只在进页面时拉一次
-  setInterval(refreshProgress, 2000);    // 进度：2 秒
-  setInterval(refreshNext, 10000);       // 之后只轮询 Next
+  /* 进页面就把三张卡按固定顺序建出来（谁先返回都不影响顺序）。
+     卡里只有一个「读取」按钮 —— 分区信息不进页面不发请求。 */
+  function initCards() {
+    for (var i = 0; i < SLOTS.length; i++) {
+      var slot = SLOTS[i];
+      if (document.getElementById('slot-' + slot.key)) { continue; }
+      var card = document.createElement('div');
+      card.className = 'panel';
+      card.id = 'slot-' + slot.key;
+      card.innerHTML = '<h2><span class="title"></span><span class="role"></span>'
+                     + '<span class="badge"><span class="dot"></span><span class="badge-text"></span></span></h2>'
+                     + '<div class="rows"></div>'
+                     + '<div class="actions"></div>';
+      card.querySelector('.title').textContent = slot.label;
+      card.querySelector('.role').textContent = slot.role;
+      card.querySelector('.badge-text').textContent = '未读取';
+      card.querySelector('.rows').appendChild(makeRow('内容', '（点击下方「读取」获取）'));
+      slotsEl.appendChild(card);
+      setActions(card, i, 'load');
+    }
+  }
+
+  initCards();
+  refreshProgress();                     // 进度是实时量，100 字节，立刻来一发
+  setInterval(refreshProgress, 2000);    // 也只有它会自己轮询
   document.addEventListener('visibilitychange', function () {
-    if (!document.hidden) { refreshProgress(); refreshNext(); }
+    if (!document.hidden) { refreshProgress(); }
   });
 })();
 </script>

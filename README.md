@@ -361,6 +361,9 @@ disappears.
   working, and the bootloader `espflash` ships has rollback disabled. An image
   that boots but misbehaves — say, one that never gets on the network — has to be
   replaced over USB.
+- Single core. The scheduler is started on the first core and the second core is
+  left parked, so the Wi-Fi stack, the HTTP server and the update work all share
+  one core. Dual-core support is expected later.
 - No watchdog. A panic halts the device until it is power-cycled, and if it
   panics while the lock is released, the door stays unlocked.
 - HTTP Basic Auth over plain HTTP is only as private as the network it runs on.

@@ -81,7 +81,12 @@ h2{font-size:15px; font-weight:600; margin-bottom:14px;
 .badge[data-kind="warn"] .dot{background:var(--warn)}
 .badge[data-kind="err"]  .dot{background:var(--danger)}
 
-button{
+/* 备用分区卡右上角那个「读取 / 刷新」：不占一整行 */
+h2 .mini{margin-left:auto; flex:none; width:auto; min-height:34px;
+         padding:6px 14px; margin-top:0; font-size:13.5px; border-radius:10px}
+h2 .mini.stale{border-color:var(--accent); color:var(--accent)}
+
+button, a.btn{
   width:100%; min-height:52px; padding:14px 16px; margin-top:4px;
   font:inherit; font-weight:500; color:var(--text);
   background:transparent; border:1.5px solid var(--line); border-radius:14px;
@@ -92,6 +97,14 @@ button{
 button:active{transform:scale(.97)}
 button:hover:not(:disabled){background:color-mix(in srgb,var(--text) 5%,transparent)}
 button:disabled{opacity:.4; cursor:default; transform:none}
+
+/* 页面之间的跳转：真链接，不用 JS */
+.nav{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px}
+a.btn{
+  display:flex; align-items:center; justify-content:center;
+  margin-top:0; text-decoration:none;
+}
+a.btn:hover{background:color-mix(in srgb,var(--text) 5%,transparent)}
 .primary{min-height:60px; font-size:17px; font-weight:600;
          color:var(--accent-ink); background:var(--accent); border-color:var(--accent)}
 .primary:hover:not(:disabled){filter:brightness(1.08)}
@@ -124,6 +137,27 @@ footer{margin-top:20px; padding:0 4px; font-size:12px; color:var(--muted);
        text-align:center; line-height:1.7}
 footer a{color:var(--accent); text-decoration:none}
 footer a:hover{text-decoration:underline}
+
+/* ── 宽屏：进度卡和上传卡并排，槽卡横跨两列，其余放大一号 ── */
+@media (min-width:820px){
+  body{padding:40px 32px 56px; font-size:17px}
+  main{max-width:920px; display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start}
+  header, .nav, footer{grid-column:1 / -1}
+  .nav{max-width:560px; margin:0 auto 16px}
+  main > .panel{margin-bottom:0}
+  #slotPanel{grid-column:1 / -1}
+  .logo{width:88px; height:88px; border-radius:22px}
+  h1{font-size:30px}
+  .sub{font-size:14px}
+  .panel{padding:26px; border-radius:22px}
+  h2{font-size:16px}
+  .status{padding:15px 16px; font-size:16px}
+  .rows > div{font-size:15px; padding:12px 16px}
+  button, a.btn{min-height:56px; font-size:16px}
+  .primary{min-height:68px; font-size:18px}
+  .hint{font-size:13.5px}
+  footer{font-size:13px}
+}
 </style>
 </head>
 <body>
@@ -134,6 +168,11 @@ footer a:hover{text-decoration:underline}
     <h1>固件维护</h1>
     <div class="sub" id="host">&nbsp;</div>
   </header>
+
+  <div class="nav">
+    <a class="btn" href="/">开门面板</a>
+    <a class="btn" href="/system/">系统信息</a>
+  </div>
 
   <div class="panel">
     <div class="status" id="phaseLine" data-kind="idle">
@@ -155,14 +194,15 @@ footer a:hover{text-decoration:underline}
     <button class="primary" id="upload">写入备用分区</button>
     <p id="msg"></p>
     <p class="hint">
-      选的是 <b>app 分区镜像</b>（<span class="mono">.bin</span>，不是 ELF）。
+      请选择 <b>应用分区镜像</b>（<span class="mono">.bin</span>），不要选择 ELF 文件。
       上传过程会先擦除再写入，期间请勿断电。
     </p>
   </div>
 
-  <div class="panel" id="slotPanel" hidden>
+  <div class="panel" id="slotPanel">
     <h2>备用分区 <span class="badge" id="slotBadge" data-kind="idle">
-      <span class="dot"></span><span id="slotState">—</span></span></h2>
+      <span class="dot"></span><span id="slotState">—</span></span>
+      <button class="mini" id="slotRefresh" type="button">读取</button></h2>
     <div class="rows" id="slotRows"></div>
     <div class="warn" id="confirmBox" hidden>
       <label><input type="checkbox" id="confirm"><span id="confirmText"></span></label>
@@ -184,14 +224,16 @@ footer a:hover{text-decoration:underline}
   'use strict';
 
   /* ────────────────────────────────────────────────────────────────
-     协议：服务端用 {:?} 直接打印，格式由下面两个手写 Debug 决定，
-     改动 src/ayachi_core/system.rs 的 impl Debug 就要改这里：
-       impl Debug for UploadProcess   (system.rs:538)
-       impl Debug for PartitionInfo   (system.rs:566)
+     协议（system.html 用的是同一套），定义在 src/ayachi_core/system.rs 的
+     impl CompactFormat（UploadProcess / SystemError / PartitionInfo）。
+     state 打的是 Debug 的名字（Idle / Empty / Available），其余全走 CompactFormat：
 
-     进度行： <uploading>|<state>|<message>|[erase_cur, erase_total]|[write_cur, write_total]
-     槽信息： [Some(]<state>|<segment_count>|<entry_address>|<chip_id>|<hash_appended>|
-              <secure_version>|<version>|<project>|<time>|<date>|<sha256>|<digest_sha256>[)]
+     进度行： <uploading>|<state>|<message>|erase_cur;erase_total|write_cur;write_total
+     槽信息： <state>|<segment_count>|<entry_address>|<chip_id>|<hash_appended>|
+              <secure_version>|<version>|<project>|<time>|<date>|<sha256>|<digest_sha256>
+
+     两个约定：没有的字段（Option::None）是字面量 `/`；[T; N] 用 `;` 连、没有括号
+     （sha256 就是 `240;185;24;…` 这种十进制字节）。
      ──────────────────────────────────────────────────────────────── */
 
   var SLOT_QUERY = 'next';          // PartitionSlot 是 #[serde(rename_all = "lowercase")]
@@ -216,8 +258,9 @@ footer a:hover{text-decoration:underline}
   var hostEl = $('host'), phaseLine = $('phaseLine'), phaseEl = $('phase'),
       bar = $('bar'), barWrap = $('barWrap'), eraseEl = $('erase'), writeEl = $('write'),
       phaseHint = $('phaseHint'), fileEl = $('file'), uploadBtn = $('upload'),
-      msgEl = $('msg'), slotPanel = $('slotPanel'), slotBadge = $('slotBadge'),
-      slotStateEl = $('slotState'), slotRows = $('slotRows'), confirmBox = $('confirmBox'),
+      msgEl = $('msg'), slotBadge = $('slotBadge'),
+      slotStateEl = $('slotState'), slotRows = $('slotRows'),
+      slotRefreshBtn = $('slotRefresh'), confirmBox = $('confirmBox'),
       confirmInput = $('confirm'), confirmText = $('confirmText'),
       activateBtn = $('activate'), actMsgEl = $('actMsg');
 
@@ -229,127 +272,36 @@ footer a:hover{text-decoration:underline}
   }
 
   /* ── 解析 Debug 输出 ── */
-  function unwrapOption(s) {                    // "Some(x)" -> "x"；"None" -> null
-    if (s === undefined || s === null) { return null; }
-    s = String(s).trim();
-    if (s === 'None') { return null; }
-    var m = /^Some\(([\s\S]*)\)$/.exec(s);
-    return m ? m[1] : s;
+  /* 字段的约定见文件开头的说明：字面量 `/` 表示"没有"，
+     sha256/digest 是分号分隔的十进制（240;185;24,…）。 */
+  /* `/` 就是"这个字段没有"（CompactFormat 的 Option::None）；顺带认一下旧版的 `None` */
+  function str(s)  { var v = (s === undefined || s === null) ? '' : String(s).trim(); return (v === '/' || v === 'None') ? '' : v; }
+  function dec(s)  { var v = str(s); return v === '' ? null : Number(v); }
+  function flag(s) { return str(s) === '1'; }
+  function hex(s)  {                                  // "78;40;201" → "4e28c9"
+    var v = str(s);
+    if (v === '') { return ''; }
+    return v.split(';').map(function (b) {
+      return ('0' + (parseInt(b, 10) & 0xff).toString(16)).slice(-2);
+    }).join('');
   }
-  function arrayOf(s) {                          // "[a, b]" -> ['a','b']；不是数组返回 null
-    var inner = unwrapOption(s);
-    if (inner === null) { return null; }
-    var m = /^\[([\s\S]*)\]$/.exec(inner.trim());
-    if (!m) { return null; }
-    return m[1].trim() === '' ? [] : m[1].split(',');
-  }
-  function bytes(s) {                            // "[48, 46]" -> Uint8Array
-    var items = arrayOf(s);
-    if (items === null) { return null; }
-    var out = new Uint8Array(items.length);
-    for (var i = 0; i < items.length; i++) { out[i] = parseInt(items[i], 10) & 0xff; }
-    return out;
-  }
-  function text(s) {                             // 字节数组 -> NUL 截断的可打印串
-    var b = bytes(s);
-    if (b === null) { return null; }
-    var out = '';
-    for (var i = 0; i < b.length && b[i] !== 0; i++) {
-      out += (b[i] >= 0x20 && b[i] < 0x7f) ? String.fromCharCode(b[i]) : '.';
-    }
-    return out;
-  }
-  function hex(s) {
-    var b = bytes(s);
-    if (b === null) { return null; }
-    var out = '';
-    for (var i = 0; i < b.length; i++) { out += ('0' + b[i].toString(16)).slice(-2); }
-    return out;
-  }
-  function num(s) {
-    var v = unwrapOption(s);
-    return v === null ? null : Number(v);
-  }
-  function pairOf(s) {                           // "[cur, total]" -> [cur, total]
-    var items = arrayOf(s);
-    if (items === null || items.length !== 2) { return null; }
-    return [parseInt(items[0], 10), parseInt(items[1], 10)];
-  }
-  function splitTopLevel(s, sep) {               // 不理会 [] 里面的分隔符
-    var out = [], depth = 0, cur = '';
-    for (var i = 0; i < s.length; i++) {
-      var c = s[i];
-      if (c === '[' || c === '(') { depth++; }
-      else if (c === ']' || c === ')') { depth--; }
-      if (c === sep && depth === 0) { out.push(cur); cur = ''; }
-      else { cur += c; }
-    }
-    out.push(cur);
-    return out;
+  function pairOf(s) {                           // `cur;total`（[u32; 2] 的 CompactFormat）
+    var items = str(s).split(';');
+    return items.length === 2 ? [Number(items[0]), Number(items[1])] : null;
   }
   function kib(n) {                              // 字节 -> KiB 字符串
     return (n / 1024).toFixed(0) + ' KiB';
   }
-
-  /* ── SHA-256（crypto.subtle 在 http 下不可用，所以自备一份） ── */
-  function rotr(x, n) { return (x >>> n) | (x << (32 - n)); }
-  var KS = [
-    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
-    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
-    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
-    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
-    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
-    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
-    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
-    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
-  ];
-  function sha256(bytesArr) {
-    var H = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
-             0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
-    var len = bytesArr.length;
-    var padded = (((len + 8) >> 6) + 1) << 6;
-    var m = new Uint8Array(padded);
-    m.set(bytesArr);
-    m[len] = 0x80;
-    var hi = Math.floor((len * 8) / 4294967296), lo = (len * 8) >>> 0;
-    m[padded - 8] = (hi >>> 24) & 0xff; m[padded - 7] = (hi >>> 16) & 0xff;
-    m[padded - 6] = (hi >>> 8) & 0xff;  m[padded - 5] = hi & 0xff;
-    m[padded - 4] = (lo >>> 24) & 0xff; m[padded - 3] = (lo >>> 16) & 0xff;
-    m[padded - 2] = (lo >>> 8) & 0xff;  m[padded - 1] = lo & 0xff;
-
-    var w = new Uint32Array(64);
-    for (var i = 0; i < padded; i += 64) {
-      for (var t = 0; t < 16; t++) {
-        w[t] = (m[i+t*4] << 24) | (m[i+t*4+1] << 16) | (m[i+t*4+2] << 8) | m[i+t*4+3];
-      }
-      for (t = 16; t < 64; t++) {
-        var s0 = rotr(w[t-15],7) ^ rotr(w[t-15],18) ^ (w[t-15] >>> 3);
-        var s1 = rotr(w[t-2],17) ^ rotr(w[t-2],19) ^ (w[t-2] >>> 10);
-        w[t] = (w[t-16] + s0 + w[t-7] + s1) >>> 0;
-      }
-      var a=H[0], b=H[1], c=H[2], d=H[3], e=H[4], f=H[5], g=H[6], h=H[7];
-      for (t = 0; t < 64; t++) {
-        var S1 = rotr(e,6) ^ rotr(e,11) ^ rotr(e,25);
-        var ch = (e & f) ^ (~e & g);
-        var t1 = (h + S1 + ch + KS[t] + w[t]) >>> 0;
-        var S0 = rotr(a,2) ^ rotr(a,13) ^ rotr(a,22);
-        var maj = (a & b) ^ (a & c) ^ (b & c);
-        var t2 = (S0 + maj) >>> 0;
-        h=g; g=f; f=e; e=(d+t1)>>>0; d=c; c=b; b=a; a=(t1+t2)>>>0;
-      }
-      H[0]=(H[0]+a)>>>0; H[1]=(H[1]+b)>>>0; H[2]=(H[2]+c)>>>0; H[3]=(H[3]+d)>>>0;
-      H[4]=(H[4]+e)>>>0; H[5]=(H[5]+f)>>>0; H[6]=(H[6]+g)>>>0; H[7]=(H[7]+h)>>>0;
-    }
-    var out = '';
-    for (i = 0; i < 8; i++) { out += ('0000000' + H[i].toString(16)).slice(-8); }
-    return out;
-  }
+  /* tag 上标着"这是设备给的 HTTP 错误"，用来和 fetch 自己的 reject（请求根本没到设备，
+     拿回来的是浏览器的 "Failed to fetch"）区分开：前者不该重试，后者该。 */
+  function httpError(message) { var e = new Error(message); e.http = true; return e; }
+  function delay(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
   /* ── 页面状态 ── */
   var lastPhase = null;      // 上一次的 UploadState，用来发现"刚跑完"
-  var lastFile = null;       // 用户选的文件，用来本地算摘要
-  var localDigest = null;    // 本地算出的镜像摘要
+  var lastFile = null;       // 用户选的文件，上传时读的就是它
   var slotInfo = null;       // 最近一次拿到的备用分区信息
+  var readAfterUpload = false;   // 刚上传完就跟着读了一次 → 别再标「有新内容」
   var pollTimer = null;
 
   /* ── 进度轮询 ── */
@@ -365,21 +317,22 @@ footer a:hover{text-decoration:underline}
       })
       .catch(function (e) {
         phaseLine.dataset.kind = 'err';
-        phaseEl.textContent = e.message === '401' ? '需要重新登录' : '连不上';
+        phaseEl.textContent = e.message === '401' ? '登录已失效' : '无法连接';
         phaseHint.textContent = e.message === '401'
           ? '刷新页面重新输入密码。' : '设备可能正在重启。';
       });
   }
 
   function renderProgress(line) {
-    var f = splitTopLevel(line, '|');
+    // 直接切就行：字段里不会出现 `|`（文本字段把 `|` 换成了 `.`）
+    var f = line.split('|');
     var uploading = null, i = 0;
 
     // 倒计时期间维护层会把所有请求 303 到重启页，这里收到的是 HTML 而不是状态行
     if (f.length < 4) {
       phaseEl.textContent = '正在切换 / 重启中';
       phaseLine.dataset.kind = 'busy';
-      phaseHint.textContent = '设备即将重启，页面会自己等它回来。';
+      phaseHint.textContent = '设备即将重启，页面将自动等待其恢复。';
       return;
     }
 
@@ -388,7 +341,7 @@ footer a:hover{text-decoration:underline}
     if (f.length === 5) { uploading = f[0].trim() === 'true'; i = 1; }
 
     var state = f[i].trim();
-    var message = unwrapOption(f[i + 1]);
+    var message = str(f[i + 1]);              // `/` = 没有错误信息
     var eraseP = pairOf(f[i + 2]);
     var writeP = pairOf(f[i + 3]);
     var info = PHASE[state] || state;
@@ -414,35 +367,92 @@ footer a:hover{text-decoration:underline}
 
     var hints = {
       Received:   '已建立连接，准备擦除。',
-      Erasing:    '正在擦除备用分区，这一步最慢（会屏蔽中断，属正常）。',
+      Erasing:    '正在擦除备用分区，此阶段耗时最长（会屏蔽中断，属正常现象）。',
       Writing:    '正在写入，请勿断电、勿关页面。',
-      Identifying:'写入完成，正在读取回校验摘要。',
-      Ready:      '固件已写入并校验完成，可以在下面确认后切换。',
+      Identifying:'写入完成，正在回读校验摘要。',
+      Ready:      '固件已写入并校验完成，可在下方确认后切换。',
       Failed:     message ? ('失败：' + message) : '固件不完整或校验不通过，未切换。',
       Idle:       ''
     };
     phaseHint.textContent = stuck && message ? ('中断于「' + info + '」：' + message)
                           : (hints[state] || '');
 
-    // 阶段从"进行中"跳到终态时，拉一次分区信息
-    if (state !== lastPhase && (state === 'Ready' || state === 'Failed')) { refreshSlot(); }
-    if (state !== lastPhase && (state === 'Idle' || state === 'Ready')) { refreshSlot(); }
+    // 阶段跳到终态 → 备用分区的内容变了。这里不自动去读（页面的分区信息只在
+    // 你点击时才发请求），只在右上角那个「刷新」上做个标记。
+    if (state !== lastPhase && (state === 'Ready' || state === 'Failed')) { markSlotStale(); }
     lastPhase = state;
   }
 
-  /* ── 备用分区信息 ── */
+  /* ── 备用分区信息 ──
+     只在两种时候读：点「读取 / 刷新」、刚上传完。没有定时器，进页面也不会主动读。 */
   function refreshSlot() {
-    fetch('/system/status/?slot=' + SLOT_QUERY, { cache: 'no-store' })
+    slotRefreshBtn.disabled = true;
+    slotRefreshBtn.textContent = '读取中…';
+
+    return fetch('/system/status?slot=' + SLOT_QUERY, { cache: 'no-store' })
       .then(function (r) {
-        if (!r.ok) { throw new Error('HTTP ' + r.status); }
+        if (r.status === 401) { throw httpError('登录已失效，请刷新页面'); }
+        // 倒计时期间维护层把所有请求 303 到重启页，fetch 会跟着跳过去（拿到 200 + HTML）
+        if (r.redirected) { throw httpError('设备正在重启，请稍后重试'); }
+        if (!r.ok) { throw httpError('HTTP ' + r.status); }
         return r.text();
       })
       .then(function (body) {
-        var inner = unwrapOption(body.trim());
-        if (inner === null) { slotPanel.hidden = true; return; }
-        renderSlot(splitTopLevel(inner, '|'));
+        readAfterUpload = true;              // 手上这份是最新的了
+        // 整段响应就是这个槽的 12 个字段；槽不存在时是字面量 `/`
+        var info = str(body);
+        if (info === '') { renderMissing(); return; }
+        renderSlot(info.split('|'));
       })
-      .catch(function () { /* 保持上一次显示 */ });
+      .catch(function (e) {
+        if (e.http) { renderSlotError(e.message); return; }
+        // 请求没到设备（刚写完 1 MB 时它可能短暂繁忙）→ 隔一会儿重试一次，
+        // 别把浏览器的 "Failed to fetch" 直接甩给用户
+        return delay(900).then(refreshSlot).catch(function () {
+          renderSlotError('设备暂时没有响应，请点「刷新」重试');
+        });
+      })
+      .finally(function () {
+        slotRefreshBtn.disabled = false;
+        slotRefreshBtn.classList.remove('stale');
+        slotRefreshBtn.textContent = '刷新';
+      });
+  }
+
+  /* 设备侧刚跑完一次上传/校验：手上这份可能过期了（不发请求，只做标记）。
+     刚上传完那次会自动读一遍，那时就别标了 —— 否则「进度轮询看到 Ready」和
+     「读槽返回」谁先到不确定，会留下一个假的标记。 */
+  function markSlotStale() {
+    if (!slotInfo || readAfterUpload) { return; }
+    slotRefreshBtn.classList.add('stale');
+    slotRefreshBtn.textContent = '刷新（内容有更新）';
+  }
+
+  function renderSlotPlaceholder() {              // 进页面时的状态：什么都没读
+    slotStateEl.textContent = '未读取';
+    slotBadge.dataset.kind = 'idle';
+    slotRows.textContent = '';
+    addRow('内容', '（点击右上角「读取」获取）');
+    slotInfo = null;
+    renderConclusion();
+  }
+
+  function renderMissing() {                      // 分区表里没有这个槽
+    slotStateEl.textContent = '不存在';
+    slotBadge.dataset.kind = 'idle';
+    slotRows.textContent = '';
+    addRow('内容', '（分区表里没有这个槽）');
+    slotInfo = null;
+    renderConclusion();
+  }
+
+  function renderSlotError(message) {             // 读失败：明说，别静默保持上一次
+    slotStateEl.textContent = '读取失败';
+    slotBadge.dataset.kind = 'err';
+    slotRows.textContent = '';
+    addRow('失败', message);
+    slotInfo = null;
+    renderConclusion();
   }
 
   function addRow(label, value, mono) {
@@ -457,36 +467,50 @@ footer a:hover{text-decoration:underline}
   }
 
   function renderSlot(f) {
-    slotPanel.hidden = false;
     slotRows.textContent = '';
+
+    // PartitionInfo 的 Debug 固定 12 个字段：数量不对就是响应被截断（设备侧 FixedString 溢出）
+    // 这种时候绝对不能拿半截数据去判断"能不能激活"
+    if (f.length !== 12) {
+      slotStateEl.textContent = '数据不完整';
+      slotBadge.dataset.kind = 'err';
+      say(actMsgEl, '设备返回的信息不完整，先别激活。', 'err');
+      activateBtn.disabled = true;
+      slotInfo = null;
+      addRow('原因', '响应被截断（设备侧缓冲太小），需要调大 FixedString 或缩短输出格式');
+      return;
+    }
 
     var state = f[0].trim();
     var meta = SLOT_STATE[state] || { text: state, kind: 'idle', activatable: false };
     slotStateEl.textContent = meta.text;
     slotBadge.dataset.kind = meta.kind;
 
-    var append = addRow;
-    append('段数',        num(f[1]) === null ? '—' : String(num(f[1])));
-    var addr = num(f[2]);
-    append('入口地址',    addr === null ? '—' : ('0x' + addr.toString(16)));
-    append('芯片 ID',     num(f[3]) === null ? '—' : String(num(f[3])));
-    append('附加摘要',    unwrapOption(f[4]) === 'true' ? '有' : '无');
-    append('安全版本',    num(f[5]) === null ? '—' : String(num(f[5])));
-    append('版本',        text(f[6]) || '—');
-    append('项目',        text(f[7]) || '—');
-    append('编译时间',    (text(f[8]) || '—') + '  ' + (text(f[9]) || ''));
-    append('ELF 摘要',    hex(f[10]) || '—', true);
-    append('镜像摘要',    hex(f[11]) || '—', true);
+    var addr = dec(f[2]);
+    addRow('段数',        dec(f[1]) === null ? '—' : String(dec(f[1])));
+    addRow('入口地址',    addr === null ? '—' : ('0x' + addr.toString(16)));
+    addRow('芯片 ID',     dec(f[3]) === null ? '—' : String(dec(f[3])));
+    addRow('附加摘要',    str(f[4]) === '' ? '—' : (flag(f[4]) ? '有' : '无'));
+    addRow('安全版本',    dec(f[5]) === null ? '—' : String(dec(f[5])));
+    addRow('版本',        str(f[6]) || '—');
+    addRow('项目',        str(f[7]) || '—');
+    addRow('编译时间',    ((str(f[8]) + '  ' + str(f[9])).trim()) || '—');
+    addRow('ELF 摘要',    hex(f[10]) || '—', true);
+    addRow('镜像摘要',    hex(f[11]) || '—', true);
     slotInfo = {
-      state: state, meta: meta, hashAppended: unwrapOption(f[4]) === 'true',
-      digest: hex(f[11]), project: text(f[7]), version: text(f[6])
+      state: state, meta: meta, hashAppended: flag(f[4]),
+      digest: hex(f[11]), project: str(f[7]), version: str(f[6])
     };
     renderConclusion();
   }
 
-  /* ── 结论 / 确认 ── */
+  /* ── 结论 / 确认 ──
+     三个能启动的状态里只有 Available 直接放行；Foreign 和 Unverified 都要勾选确认，
+     各自一句明确的警告。其余状态一律不给切，也就没有可确认的东西。 */
   function renderConclusion() {
     confirmBox.hidden = true;
+    confirmInput.checked = false;
+    confirmInput.hidden = true;        // 只有需要勾选的那两种才把它露出来
     activateBtn.disabled = true;
     say(actMsgEl, '');
 
@@ -496,13 +520,13 @@ footer a:hover{text-decoration:underline}
     if (!meta.activatable) {
       confirmBox.hidden = false;
       confirmBox.className = 'warn err';
-      confirmText.textContent = '这个分区里的内容不能拿去启动，请重新上传固件。';
+      confirmText.textContent = '该分区的内容无法用于启动，请重新上传固件。';
       return;
     }
-    if (meta.kind === 'ok') {
+    if (meta.kind === 'ok') {          // Available：直接放行，不需要勾任何东西
       confirmBox.hidden = false;
       confirmBox.className = 'warn ok';
-      confirmText.textContent = '校验通过，是本项目的固件，可以直接切换。' + digestNote();
+      confirmText.textContent = '校验通过，是本项目的固件，可以直接切换。';
       activateBtn.disabled = false;
       return;
     }
@@ -510,64 +534,61 @@ footer a:hover{text-decoration:underline}
     // 需要用户确认：未验证 / 外来固件
     confirmBox.hidden = false;
     confirmBox.className = 'warn';
+    confirmInput.hidden = false;       // 这两种必须勾选才放行
     var why = [];
     if (meta.confirm === 'unverified') {
-      why.push('镜像没有附加摘要，板子无法校验内容。上下的「镜像摘要」是板子从 flash 读出来的，'
-             + '请和发布方给出的摘要核对。' + digestNote());
+      why.push('该镜像未附带摘要，设备无法校验其内容。'
+             + '请确认已自行核对 SHA-256：上方「镜像摘要」由设备从 flash 读回，'
+             + '须与发布方公布的摘要一致后方可继续。');
     }
     if (meta.confirm === 'foreign') {
-      why.push('这不是本项目（' + (slotInfo.project || '?') + '）的固件。'
-             + '切换并重启后会运行它，届时只能靠 USB 重新烧写才能恢复门禁功能。');
+      why.push('这不是本项目（' + (slotInfo.project || '?') + '）的固件，切换后将运行来源不明的程序。'
+             + '此操作不可逆：重启后仅能通过 USB 重新烧写恢复门禁功能。');
     }
-    confirmText.textContent = why.join(' ') + ' 勾选左边方框后才能切换。';
-    confirmInput.checked = false;
+    confirmText.textContent = why.join(' ') + ' 勾选左侧复选框后方可切换。';
     activateBtn.disabled = true;      // 勾选后由 change 处理器放行
-  }
-
-  function digestNote() {
-    if (!localDigest) { return ''; }
-    if (localDigest === slotInfo.digest) { return ' 本地文件摘要与板子读回的一致。'; }
-    return ' ⚠ 本地文件摘要与板子读回的不一致，写入可能出错。';
   }
 
   /* ── 上传 ── */
   function pickFile() {
     lastFile = fileEl.files && fileEl.files[0] ? fileEl.files[0] : null;
-    localDigest = null;
     if (lastFile) { say(msgEl, '已选择 ' + lastFile.name + '（' + kib(lastFile.size) + '）'); }
     else { say(msgEl, ''); }
-  }
-
-  function computeLocalDigest() {
-    if (!lastFile) { return Promise.resolve(); }
-    return lastFile.arrayBuffer().then(function (buf) {
-      var all = new Uint8Array(buf);
-      // 镜像头的第 23 字节 = 有没有附加摘要；附加的 32 字节摘要本身不参与哈希
-      var hashLen = (all.length > 24 && all[23] !== 0) ? all.length - 32 : all.length;
-      if (hashLen <= 0) { return; }
-      localDigest = sha256(all.subarray(0, hashLen));
-    });
   }
 
   function upload() {
     if (!lastFile) { say(msgEl, '请先选择 .bin 文件', 'err'); return; }
     uploadBtn.disabled = true;
     uploadBtn.classList.add('busy');
+    readAfterUpload = false;              // 这次上传之后还没读过
     say(msgEl, '上传中…');
 
     fetch('/system/upload', { method: 'POST', body: lastFile, cache: 'no-store' })
       .then(function (r) {
+        // 倒计时期间维护层会把这条 POST 303 成一条 GET 到重启页：字节一个都没写进去，
+        // 却拿到 200。绝不能当成"写入完成"。
+        if (r.redirected) { throw new Error('设备正在切换或重启，固件未写入'); }
         return r.text().then(function (t) {
-          if (r.status === 401) { throw new Error('需要重新登录，请刷新页面'); }
+          if (r.status === 401) { throw new Error('登录已失效，请刷新页面'); }
           if (!r.ok) { throw new Error(t.trim() || ('HTTP ' + r.status)); }
           return t;
         });
       })
       .then(function () {
-        say(msgEl, '写入完成，正在校验…', 'ok');
-        return computeLocalDigest();
+        say(msgEl, '写入完成，正在读取校验结果…', 'ok');
+        refreshProgress();
+        // 和上面那个进度请求错开：设备刚写完 1 MB（擦除阶段还关过中断），
+        // 紧接着两个并发连接容易有一个被拒（max_connections = 4）
+        return delay(700).then(refreshSlot);
       })
-      .then(function () { refreshProgress(); refreshSlot(); })
+      .then(function () {
+        // 结论以「备用分区」那张卡为准，别再让按钮下面那句停在"正在校验"
+        if (!slotInfo) { say(msgEl, '写入完成；读取备用分区失败，请点「刷新」。'); return; }
+        say(msgEl, slotInfo.meta.activatable
+              ? '写入完成，可在下方确认后切换。'
+              : '写入完成，但镜像未通过校验，请重新选择文件。',
+            slotInfo.meta.activatable ? 'ok' : 'err');
+      })
       .catch(function (e) { say(msgEl, '失败：' + e.message, 'err'); })
       .finally(function () {
         uploadBtn.disabled = false;
@@ -579,17 +600,21 @@ footer a:hover{text-decoration:underline}
   function activate() {
     if (!slotInfo || !slotInfo.meta.activatable) { return; }
     if (slotInfo.meta.confirm && !confirmInput.checked) {
-      say(actMsgEl, '请先勾选上面的确认项', 'err');
+      say(actMsgEl, '请先勾选上方确认项', 'err');
       return;
     }
 
     activateBtn.disabled = true;
     say(actMsgEl, '正在切换…');
 
-    fetch('/system/activate', { method: 'POST', cache: 'no-store' })
+    // 注意尾斜杠：服务端这条是 .nest("/activate", route("/"))，所以匹配的是
+    // /system/activate/，写成 /system/activate 会 404（picoserve 要整条路径吃完）
+    fetch('/system/activate/', { method: 'POST', cache: 'no-store' })
       .then(function (r) {
+        // 已经有倒计时在跑时，维护层会把这条请求 303 到重启页 —— 这次点击并没有生效
+        if (r.redirected) { throw new Error('设备已在切换或重启，本次操作未生效'); }
         return r.text().then(function (t) {
-          if (r.status === 401) { throw new Error('需要重新登录，请刷新页面'); }
+          if (r.status === 401) { throw new Error('登录已失效，请刷新页面'); }
           if (!r.ok) { throw new Error(t.trim() || ('HTTP ' + r.status)); }
           return t;
         });
@@ -621,6 +646,7 @@ footer a:hover{text-decoration:underline}
   fileEl.addEventListener('change', pickFile);
   uploadBtn.addEventListener('click', upload);
   activateBtn.addEventListener('click', activate);
+  slotRefreshBtn.addEventListener('click', refreshSlot);
   confirmInput.addEventListener('change', function () {
     if (slotInfo && slotInfo.meta.confirm) {
       activateBtn.disabled = !confirmInput.checked;   // 确认项勾上才放行
@@ -629,11 +655,15 @@ footer a:hover{text-decoration:underline}
 
   document.addEventListener('visibilitychange', function () {
     if (document.hidden) { stopPolling(); }
-    else { startPolling(); refreshProgress(); refreshSlot(); }
+    else { startPolling(); refreshProgress(); }
   });
 
+  // 进度是实时量，进页面就开始轮询（100 字节一行）。
+  // 备用分区不主动读：进页面只有右上角一个「读取」，点了才发那个请求。
+  // 唯一会自己读一次的场景是刚上传完 —— 那是点「写入」的直接结果，
+  // 而且下面的激活按钮要根据它判断能不能切。
+  renderSlotPlaceholder();
   refreshProgress();
-  refreshSlot();
   startPolling();
 })();
 </script>

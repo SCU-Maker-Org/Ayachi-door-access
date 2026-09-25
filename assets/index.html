@@ -66,7 +66,7 @@ h1{font-size:24px; font-weight:700; letter-spacing:-.02em}
 .acts{display:grid; gap:12px}
 .row{display:grid; grid-template-columns:1fr 1fr; gap:12px}
 
-button{
+button, a.btn{
   width:100%; min-height:52px; padding:14px 16px;
   font:inherit; font-weight:500; color:var(--text);
   background:transparent; border:1.5px solid var(--line); border-radius:14px;
@@ -74,6 +74,12 @@ button{
   -webkit-tap-highlight-color:transparent;
   transition:transform .08s, background .15s, border-color .15s, opacity .15s;
 }
+/* 跳转用的按钮做成真链接：能新标签打开、能右键、不需要 JS */
+a.btn{
+  display:flex; align-items:center; justify-content:center;
+  text-decoration:none;
+}
+a.btn:hover{background:color-mix(in srgb,var(--text) 5%,transparent)}
 button:active{transform:scale(.97)}
 button:hover:not(:disabled){background:color-mix(in srgb,var(--text) 5%,transparent)}
 button:disabled{opacity:.4; cursor:default; transform:none}
@@ -101,6 +107,21 @@ footer{
 }
 footer a{color:var(--accent); text-decoration:none}
 footer a:hover{text-decoration:underline}
+
+/* ── 宽屏（桌面 / 横屏平板）：放大一号，别把手机版原样摆在中间 ── */
+@media (min-width:820px){
+  body{padding:40px 32px 56px; font-size:17px}
+  main{max-width:560px}
+  .logo{width:88px; height:88px; border-radius:22px}
+  h1{font-size:30px}
+  .sub{font-size:14px}
+  .panel{padding:28px; border-radius:22px}
+  .status{padding:16px 18px; font-size:16px}
+  button, a.btn{min-height:56px; font-size:16px}
+  .primary{min-height:72px; font-size:20px}
+  #msg{font-size:14.5px}
+  footer{font-size:13px}
+}
 </style>
 </head>
 <body>
@@ -126,6 +147,10 @@ footer a:hover{text-decoration:underline}
         <button data-act="/setopen?state=1">持续开放</button>
         <button data-act="/setopen?state=0">设为锁定</button>
       </div>
+      <div class="row">
+        <a class="btn" href="/system/">系统信息</a>
+        <a class="btn" href="/system/maintenance">固件维护</a>
+      </div>
     </div>
 
     <p id="msg"></p>
@@ -133,9 +158,11 @@ footer a:hover{text-decoration:underline}
   </div>
 
   <footer>
-    Han_feng · 2026<br>
-    More information on: <a href="https://github.com/SCU-Maker-Org/Ayachi-door-access"
-                            target="_blank" rel="noopener">GitHub</a>
+    <a href="/system/">系统信息</a> ·
+    <a href="/system/maintenance">固件维护</a> ·
+    <a href="https://github.com/SCU-Maker-Org/Ayachi-door-access"
+       target="_blank" rel="noopener">GitHub</a><br>
+    Han_feng · 2026
   </footer>
 
 </main>
@@ -164,7 +191,9 @@ footer a:hover{text-decoration:underline}
   }
 
   // ── 状态轮询 ──
-  // 后端还没有 /status 路由时，安静地降级成 "—"，不影响其他功能
+  // 只认 open / lock 两种响应体。切换倒计时期间维护层会把 /status 303 到重启页，
+  // fetch 会安静地跟着跳过去，拿回来的是 HTML —— 那时候门的状态是未知的，
+  // 既不能显示"锁定"，也不能让下面"开门一次"以为门是锁着的。
   function refresh() {
     fetch('/status', { cache: 'no-store' })
       .then(function (r) {
@@ -172,7 +201,9 @@ footer a:hover{text-decoration:underline}
         return r.text();
       })
       .then(function (t) {
-        var open = t.trim() === 'open';
+        var body = t.trim();
+        if (body !== 'open' && body !== 'lock') { throw new Error('unknown'); }
+        var open = (body === 'open');
         stateEl.textContent = open ? '开放' : '锁定';
         statusEl.dataset.open = open ? '1' : '0';
         statusEl.dataset.live = '1';
@@ -180,6 +211,7 @@ footer a:hover{text-decoration:underline}
       .catch(function () {
         stateEl.textContent = '—';
         statusEl.dataset.live = '0';
+        delete statusEl.dataset.open;
       });
   }
 
@@ -191,6 +223,9 @@ footer a:hover{text-decoration:underline}
 
     fetch(url, { cache: 'no-store' })
       .then(function (r) {
+        // 切换倒计时期间维护层会把所有请求 303 到重启页，fetch 会安静地跟着跳过去：
+        // 指令根本没执行，拿到的却是 200。这种情况绝不能报"成功"——门没开。
+        if (r.redirected) { throw new Error('设备正在切换 / 重启，指令没有送达'); }
         return r.text().then(function (body) {
           if (!r.ok) { throw new Error(body.trim() || ('HTTP ' + r.status)); }
         });
@@ -208,11 +243,13 @@ footer a:hover{text-decoration:underline}
     // UI 层防御：门已经开放时不再发请求。
     // 真正的守卫在服务端 —— door_task 里 `status() == Lock` 那个判断。
     if (statusEl.dataset.open === '1') {
-      say('门已经是开放状态了');
+      say('门当前已处于开放状态');
       return;
     }
 
-    send('/open', openBtn, '已开门，3 秒后自动上锁');
+    // "3 秒"跟着 server_config.toml 的 door.open_once_delay 走（默认 3000 ms）：
+    // 换了配置这句文案就会说谎，要么一起改，要么别写数字。
+    send('/open', openBtn, '已开门，将在 3 秒后自动上锁');
   });
 
   document.querySelectorAll('button[data-act]').forEach(function (btn) {
@@ -222,7 +259,7 @@ footer a:hover{text-decoration:underline}
   });
 
   refresh();
-  setInterval(refresh, 3000);   // 开门 3 秒会自锁，轮询快一点才看得到
+  setInterval(refresh, 3000);   // 开门后会自动上锁（door.open_once_delay），轮询快一点才看得到
 
   // 页面回到前台时立刻刷一次
   document.addEventListener('visibilitychange', function () {

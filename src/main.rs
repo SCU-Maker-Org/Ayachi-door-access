@@ -25,7 +25,7 @@ use esp_radio::wifi::WifiError;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-const HEAP_SIZE: usize = 80; // KB
+const HEAP_SIZE: usize = 60; // KB
 
 #[esp_rtos::main]
 async fn main(spawner: embassy_executor::Spawner) {

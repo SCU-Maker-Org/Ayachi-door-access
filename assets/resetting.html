@@ -59,6 +59,19 @@ a.btn.ghost{color:var(--text); background:transparent; border:1.5px solid var(--
 
 footer{margin-top:22px; font-size:12px; color:var(--muted); line-height:1.7}
 footer a{color:var(--accent); text-decoration:none}
+
+/* ── 宽屏：这一页只有一列内容，放大一号就够 ── */
+@media (min-width:820px){
+  body{padding:40px}
+  main{max-width:520px}
+  .logo{width:88px; height:88px; border-radius:22px}
+  h1{font-size:28px}
+  .sub{font-size:15px}
+  .panel{padding:26px; border-radius:22px}
+  .panel p, .panel ol{font-size:15px}
+  a.btn{font-size:16px; padding:16px}
+  footer{font-size:13px}
+}
 </style>
 </head>
 <body>
@@ -73,9 +86,9 @@ footer a{color:var(--accent); text-decoration:none}
     <h2>设备似乎没有重启</h2>
     <p>切换指令已经下发，但设备仍然在线。可能是：</p>
     <ol>
-      <li>重启还没到（最多等 5 秒）；</li>
-      <li>你要访问的其实是另一台设备；</li>
-      <li>切换没有真正写进 OTA 数据分区。</li>
+      <li>重启尚未发生（最多 5 秒）；</li>
+      <li>实际访问的是另一台设备；</li>
+      <li>切换未真正写入 OTA 数据分区。</li>
     </ol>
     <a class="btn" href="/system/">回到系统信息</a>
     <a class="btn ghost" href="/system/maintenance">回到固件维护</a>
@@ -83,6 +96,7 @@ footer a{color:var(--accent); text-decoration:none}
 
   <footer>
     <a href="/system/">系统信息</a> ·
+    <a href="/system/maintenance">固件维护</a> ·
     <a href="/">开门面板</a><br>
     Han_feng · 2026
   </footer>
@@ -104,12 +118,17 @@ footer a{color:var(--accent); text-decoration:none}
   var WAIT_DOWN_MS = 15000;  // 等它掉线的上限
   var STEP = 800;
 
-  // 倒计时：/system/activate/countdown 返回 Some(n) / None，未鉴权，可以放心轮询
+  // 倒计时：/system/activate/countdown 未鉴权，可以放心轮询。
+  // 响应体就是那个数字（没有倒计时在跑时是字面量 `/`）—— 走的是 Option 的
+  // CompactFormat，不是 Debug，所以没有 Some(...) 那层壳。
   function readCountdown() {
     fetch('/system/activate/countdown', { cache: 'no-store' })
       .then(function (r) { return r.text(); })
       .then(function (t) {
-        var m = /Some\((\d+)\)/.exec(t);
+        // 必须整条响应就是一个数字：倒计时结束后（或压根没在跑），维护层会把这条
+        // 请求 303 到 /system/maintenance，fetch 跟着跳过去拿回来的是 HTML —— 里面
+        // 有 "2026" 这种数字，用宽松的 /\d+/ 会显示成"正在重启 · 2026 秒"。
+        var m = /^\s*(\d+)\s*$/.exec(t);
         if (m && !wentDown) {
           titleEl.textContent = '正在重启 · ' + m[1] + ' 秒';
           detailEl.textContent = '固件已切换，倒计时结束后设备重启。';
@@ -133,7 +152,7 @@ footer a{color:var(--accent); text-decoration:none}
 
         if (wentDown) {
           titleEl.textContent = '已恢复';
-          detailEl.textContent = '设备回来了，正在跳转…';
+          detailEl.textContent = '设备已恢复，正在跳转…';
           spinEl.hidden = true;
           location.replace('/system/');
           return;
@@ -150,7 +169,7 @@ footer a{color:var(--accent); text-decoration:none}
         // 连不上 = 正在重启
         wentDown = true;
         titleEl.textContent = '正在重启';
-        detailEl.textContent = '设备已断开，等它回来…';
+        detailEl.textContent = '设备已断开，等待恢复…';
       });
   }
 
