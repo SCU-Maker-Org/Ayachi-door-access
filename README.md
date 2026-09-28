@@ -100,10 +100,10 @@ charge-only and will never be recognised by the host — if `espflash` reports
 ## Configuration
 
 The firmware is configured by a TOML file that `build.rs` reads at compile time.
-It has to be shaped like `config/server_config_template.toml` — the same
-sections and field names — and that template is where every field is explained.
+It has to be shaped like `server_config_template.toml` — the same sections and
+field names — and that template is where every field is explained.
 
-Copy it to `config/server_config.toml`: that is the path
+Copy it to `server_config.toml`, next to it in the crate root: that is the path
 `.cargo/config.toml` supplies by default, so the build picks it up on its own,
 with no extra flag to add. It is listed in `.gitignore`, so a checkout always
 builds against your own copy. To build against a file somewhere
@@ -116,7 +116,7 @@ template marks `[]` — and at least one account:
 - `users.signed` — at least one account for the control panel. See the comments
   in the template for the exact syntax; an empty list means nobody can log in.
 
-Two further fields require a decision rather than a value:
+Three further fields require a decision rather than a value:
 
 - `users.salt` — the template ships a placeholder; choosing your own is
   recommended, so that the value is not shared with other builds of this
@@ -125,6 +125,16 @@ Two further fields require a decision rather than a value:
   slower to authenticate, and with HTTP Basic Auth every request pays that cost.
   The template value is a safe starting point; raising it further is a trade-off
   to measure.
+- `device.panic_retry` — how many panics in a row the device tolerates before it
+  gives up on the running image and returns to the factory one; see
+  [Panic handling](#panic-handling). The template value rides out a one-off
+  fault and still gives up on an image that panics on every boot.
+
+The `[memory]` section is a decision of a different kind: it says how much of the
+board this project takes, and how that space is divided. The cargo runner turns it
+into the partition table it flashes, so building through `cargo run` keeps the two
+in step; a hand-written `espflash` command has to pass a table that agrees — see
+[Building and flashing](#building-and-flashing).
 
 ### How secrets are handled
 
@@ -145,38 +155,59 @@ Connect the board and run:
 cargo run --release
 ```
 
-This builds, flashes over USB, and opens a serial monitor. **Use `--release`**:
-debug builds can be an order of magnitude slower and can misbehave in
-timing-sensitive code.
+**Use `--release`**: debug builds can be an order of magnitude slower and can
+misbehave in timing-sensitive code — and the runner `cargo run` needs is only
+built in a release profile, so without the flag there is nothing to run.
 
-To build without flashing:
+### What `cargo run` does
+
+Beyond building, three things happen in the cargo runner
+(`tools/ayachi_runner.rs`, compiled by `build.rs` into `target/ayachi_runner`):
+
+1. **It generates the partition table** from the `[memory]` section of your
+   config (there is no table in the repository to keep in step by hand) and saves
+   it next to the artifacts it builds, in `target/ayachi-door-access/<version>/`
+   — `<version>` being the one in `Cargo.toml`:
+
+   ```
+   target/ayachi-door-access/<version>/
+   ├── ayachi-door-access-v<version>.bin   the application image
+   ├── ayachi-door-access-v<version>.elf   the same, with symbols for the log
+   └── memory_partitions.csv               the table it flashed
+   ```
+
+2. **It flashes with that table**, into the factory slot
+   (`--target-app-partition origin`).
+3. **It clears the OTA boot selection** (`--erase-parts otadata`), so a USB flash
+   is authoritative over any update activated earlier — without it the bootloader
+   keeps booting the slot recorded in otadata, and the flash appears to do
+   nothing.
+
+> **A partition table has to be passed.** It is not baked into the application
+> image, so a bare `espflash flash` writes its own default single-factory table
+> over the one in flash — a table with no second application slot, which disables
+> Wi-Fi updates without reporting an error. `cargo run` passes the generated one;
+> anything else has to name one.
+
+### Building without flashing
 
 ```bash
 cargo build --release
 ```
 
-If the serial port is not detected automatically, name it explicitly and keep
-the partition-table flags:
+A plain build produces no partition table and no image copy: generating those is
+the runner's job, not the compiler's. To flash what you built by hand — for
+example on a port `cargo run` does not pick up — pass the table from an earlier
+`cargo run` of the same version:
 
 ```bash
 espflash flash --monitor --port COM5 \
-  --partition-table config/memory_partitions.csv --target-app-partition origin \
-  --erase-parts otadata
+  --partition-table target/ayachi-door-access/<version>/memory_partitions.csv \
+  --target-app-partition origin --erase-parts otadata
 ```
 
-> **Always pass the partition table.** It is not baked into the image, so a bare
-> `espflash flash` writes its own default single-factory table over the one in
-> flash. That table has no second application slot, which disables Wi-Fi updates
-> without reporting an error. `cargo run` already supplies these flags (they live
-> in `.cargo/config.toml`); only hand-written `espflash` commands have to add
-> them.
-
-> **Clear the OTA boot selection as well** (`--erase-parts otadata`). `espflash`
-> never touches the OTA data partition, so without this a USB flash has no effect
-> once an update has been activated: the bootloader keeps booting the slot
-> recorded there. Erasing it leaves the partition empty — the bootloader's
-> "factory boot condition" — so that a USB flash determines the boot slot again.
-> Both `cargo run` and `sundries/flash_scu.bat` already do this.
+`cargo run` adds the last two flags itself; only a hand-written command has to
+spell them out.
 
 ### Using a prebuilt binary
 
@@ -185,6 +216,11 @@ carries a prebuilt `.bin` image. It is an ordinary ESP32-S3 binary image, with
 nothing about it specific to this project's build setup, so **any** flashing
 tool accepts it as it is: esptool, the Arduino IDE or PlatformIO, or a
 board-vendor GUI flasher. No local build and no conversion is required.
+
+That `.bin` is an *application* image, so it carries no partition table: it is
+what goes into a board that already runs this firmware. A board that has never
+been flashed needs the `-merged.bin` from the same release instead — the
+whole-flash image, bootloader and partition table included, written from `0x0`.
 
 > The configuration is baked in at build time, so a prebuilt image is tied to
 > the network and the accounts it was built with.
@@ -227,8 +263,8 @@ espflash monitor --elf target/xtensa-esp32s3-none-elf/release/ayachi-door-access
 
 ### SERVER_CONFIG
 
-Which config file `build.rs` reads; the default is `config/server_config.toml`.
-To build against a file somewhere else:
+Which config file `build.rs` reads; the default is `server_config.toml`, in the
+crate root. To build against a file somewhere else:
 
 ```bash
 SERVER_CONFIG=your_path_to_server_config cargo run --release
@@ -290,30 +326,45 @@ The device can replace its own application image. Start at `/system/maintenance`
 1. **Upload** the application image — the `.bin` from a release, not the ELF.
    The progress bar follows the erase and then the write; the page polls the
    device, so it is fine to refresh or reopen it mid-upload.
-2. **Read what landed.** Click **Read** on the backup-partition card — nothing is
-   fetched from the device until then. It reports the version, project name,
-   build time and the digests it finds in the image. If the image carries an
-   appended digest the device has already checked it; if it does not, the card
-   shows the digest the device read back from flash, for you to compare with the
-   one the release publishes.
+2. **Check what landed.** Pick the slot under **Target slot**, then click
+   **Read** on its card. The device keeps no per-slot information until it is
+   asked, and that click is the asking: it reads the image back out of flash and
+   hashes it, so it takes a moment — read when you mean to, not in a loop. The
+   card reports the version, project name, build time and the digests it finds in
+   the image. If the image carries an appended digest the device has already
+   checked it; if it does not, the card shows the digest the device read back from
+   flash, for you to compare with the one the release publishes.
 3. **Activate.** The device switches the boot slot, counts down a few seconds,
    and reboots. The page follows the reboot and returns to the control panel on
    its own. If the new image never comes back, reflash over USB — that also
    clears the boot selection, so the device boots the freshly flashed `origin`.
 
-Uploads always go into the *inactive* slot — the firmware that is running is
-never written over, and nothing is switched until you activate. If a new image
-fails the bootloader's own validation, the bootloader falls back to the factory
-slot (`origin`), so a refused image does not leave the device unusable.
+Uploads go into the slot you name, and only into it. Each upload erases its
+target before writing, which is why the device refuses two slots: the factory
+image (`origin`), which is written over USB only, and the slot it booted from,
+since erasing that erases the code it is running. It cannot always tell which
+slot it booted from; when it cannot, the page asks you to confirm a target that
+is not empty. Nothing is switched until you activate. If a new image fails the
+bootloader's own validation, the bootloader falls back to the factory slot
+(`origin`), so a refused image does not leave the device unusable.
 
-The page asks for an explicit confirmation before activating an image that is
+An image that boots but keeps panicking does not need the cable either: the panic
+counter (see [Panic handling](#panic-handling)) abandons it after
+`device.panic_retry` panics, and the device returns to the factory image. An
+image that boots cleanly and then simply does not do its job — one that never
+gets on the network, say — never panics, so nothing counts it; the door still
+opens from the button, but remote access and this page need a cable.
+
+The same slots are listed one card at a time on `/system/`, and every card has an
+activate button of its own — on the factory card it reads **Return to factory
+settings**, which clears the boot selection, so the next boot is the factory
+image: the state a USB flash leaves behind.
+
+Both pages ask for an explicit confirmation before activating an image that is
 *not* one this project built, or one it could not verify — moving to either is
 not something the device can undo by itself. The page shown while it reboots,
 and the countdown it polls, are deliberately left unauthenticated so a reboot
 does not prompt for the password again.
-
-> **This feature is new.** It has been written but not yet exercised on real
-> hardware, so treat Wi-Fi updates as experimental for now.
 
 ### Troubleshooting
 
@@ -324,9 +375,14 @@ does not prompt for the password again.
 | Connected, but no IP | The access point is not handing out DHCP leases |
 | `ayachinene.local` does not resolve | Check the environment of the tool you are using to open the address. |
 | Nothing on the panel, page loads | The device is fine; check the serial log |
-| Upload refused, "not supported" | Either the partition table in flash has no second app slot (reflash with `--partition-table`) or the OTA data partition is unreadable — see the otadata item under [Known limitations](#known-limitations) |
+| Upload refused, `OTA(Invalid)` | The target is the factory image, or the slot the device booted from — choose another slot |
+| Upload refused, `OTA(NotSupported)` | The slot is past the last one, or the file length is not a multiple of the flash write size |
+| Upload answered `200`, but the progress line ends in `OTA(Invalid)` | The partition table in flash has no such slot: `espflash` writes its default single-app table unless you pass `--partition-table`, or the firmware was built for more slots than the table has |
+| Activation refused, `OTA(InvalidImage)` | That slot holds something that cannot boot — upload an application image into it |
 | Upload finishes but the image is `broken` | The file was not an application `.bin`, or it was truncated on the way |
 | Upload slower than expected | Each progress poll pays a PBKDF2, on the same core that is erasing and writing the flash — polling competes with the update. Poll less often, or exempt `/system/progress` from auth |
+| A reboot with a backtrace at the end of the log | A panic: the firmware printed where it happened and rebooted. Nothing to do unless it repeats |
+| The device reboots, reboots again, and comes back on the factory image | It panicked `device.panic_retry` times in a row, so the boot selection was cleared. Read the panic in the log, fix the image, and update again |
 
 ## Project layout
 
@@ -334,7 +390,7 @@ does not prompt for the password again.
 src/
 ├── main.rs                 startup: init, spawn tasks, keep Wi-Fi connected
 └── ayachi_core/
-    ├── mod.rs              shared config constants
+    ├── mod.rs              generated constants, panic handling, factory reset
     ├── door.rs             door state machine and lock hardware
     ├── network.rs          Wi-Fi controller and the embassy-net stack
     ├── mdns.rs             mDNS responder
@@ -344,16 +400,21 @@ src/
 assets/
 ├── index.html              the control panel
 ├── maintenance.html        the firmware update page
-├── system.html             partition and progress details
+├── system.html             the slots, the progress, per-slot activation
 ├── resetting.html          shown while the device reboots
 └── pic/                    logo and favicon
-config/
-├── server_config_template.toml   the configuration template
-└── memory_partitions.csv         the partition table (factory + 2 OTA slots)
 docs/
 └── http-api.md             the HTTP endpoints, for scripts and clients
-build.rs                    reads the config, generates constants
+tools/
+└── ayachi_runner.rs        the cargo runner: builds the partition table, flashes
+build.rs                    reads the config, generates constants, builds the runner
+server_config_template.toml the configuration template
+                            (`server_config.toml` next to it is yours, gitignored)
 ```
+
+The partition table is not a source file: the cargo runner generates it from the
+`[memory]` section and hands it to `espflash` — see
+[Building and flashing](#building-and-flashing).
 
 The lock is owned by a single task (`door_task`). Other parts of the firmware
 never touch the relay pin; they send it requests through signals instead. That
@@ -361,39 +422,34 @@ keeps the lock's state transitions serialised, so two callers cannot contend for
 the lock.
 
 Updates follow the same shape: the HTTP handler only writes the image into the
-inactive slot, and a separate task (`system_task`) owns the switch-over and the
-reboot. That is what lets the browser finish its request before the device
+slot it was given, and a separate task (`system_task`) owns the switch-over and
+the reboot. That is what lets the browser finish its request before the device
 disappears.
+
+## Panic handling
+
+A panic — or a hardware fault, which the firmware turns into one — prints the
+message and a backtrace, then reboots. It does not halt the device, and it does
+not leave the lock in whatever state it was in: the lock pin is driven again on
+the way up, so a device that panicked comes back locked.
+
+Each panic also adds to a counter kept in an RTC register that survives a
+software reset. That counter is what makes a boot loop recoverable: when it
+reaches `device.panic_retry`, the next boot erases the OTA boot selection and the
+bootloader falls back to the factory image. The bootloader `espflash` ships has
+its own rollback support disabled, so the counting happens in the firmware. The
+counter is cleared when an update is activated, so a freshly activated image
+starts counting from zero.
 
 ## Known limitations
 
-- Wi-Fi updates need the app-slot partition table. A board flashed with
-  `espflash`'s default table has a single application slot and cannot update
-  itself — see [Building and flashing](#building-and-flashing).
-- There is no rollback yet: the firmware does not confirm an activated image as
-  working, and the bootloader `espflash` ships has rollback disabled. An image
-  that boots but misbehaves — say, one that never gets on the network — has to be
-  replaced over USB.
-- **Activating a few times in a row can corrupt the OTA data partition.** This is
-  a defect in the `esp-bootloader-esp-idf` crate this firmware builds its update
-  path on: it rewrites that partition without erasing the target sector first,
-  and NOR flash can only clear bits, so after a couple of switches the sequence
-  number can no longer be represented. In practice the **third activation since
-  the last USB flash** writes an invalid entry: the slot pages then report a read
-  failure and later uploads are refused with `OTA(NotSupported)`, while the
-  device itself keeps working from `origin`. `espflash erase-region 0xf000
-  0x2000` clears it. The fix is to erase the target 4 KB half before switching —
-  or to own the OTA data partition outright — and it belongs with multi-slot
-  support, below.
-- **Multi-slot is planned.** The partition table has room for two more
-  application slots in the upper half of the 16 MB flash, and updating a *named*
-  slot (instead of "the inactive one") is the reason the OTA data partition has
-  to be handled by us rather than by the crate.
-- Single core. The scheduler is started on the first core and the second core is
-  left parked, so the Wi-Fi stack, the HTTP server and the update work all share
-  one core. Dual-core support is expected later.
-- No watchdog. A panic halts the device until it is power-cycled, and if it
-  panics while the lock is released, the door stays unlocked.
+- Multi-core is planned. Everything runs on one core currently: the scheduler starts
+  on the first core and leaves the second one parked, so the Wi-Fi stack, the
+  HTTP server and the update work all share it.
+- The panic counter is only cleared when an update is activated, not on a
+  successful boot, so unrelated one-off panics months apart add up: enough of
+  them return the device to the factory image with nothing wrong with the image
+  it was running.
 - HTTP Basic Auth over plain HTTP is only as private as the network it runs on.
 
 ## Credits

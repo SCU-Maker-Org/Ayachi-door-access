@@ -41,67 +41,129 @@ immediately: the door may still be moving when the response arrives. Read
 | GET | `/system/maintenance` | yes | update page (HTML) |
 | GET | `/system/resetting` | no | shown while the device reboots (HTML) |
 | GET | `/system/progress` | yes | upload progress, one line — see below |
-| GET | `/system/status?slot=<slot>` | yes | one partition — see below |
+| GET | `/system/slots` | yes | how many application slots the firmware knows about — see below |
+| GET | `/system/booted` | yes | the slot the device booted from, or `/` when it could not tell — see below |
+| GET | `/system/status/<slot>` | yes | one slot, as last seen — see below |
+| GET | `/system/inspect/<slot>` | yes | one slot, rescanned — **expensive, see below** |
 | GET | `/system/activate/countdown` | no | the remaining seconds while a countdown runs; otherwise redirected — see below |
-| POST | `/system/activate/` | yes | `Activating` (200), or `400` with the reason |
-| POST | `/system/upload` | yes | `Upload successfully` (200), or `400` with the reason |
+| POST | `/system/activate/<slot>` | yes | `Activating` (200), or `400` with the reason |
+| POST | `/system/upload/<slot>` | yes | `Upload successfully` (200), or `400` with the reason |
 
-`<slot>` is `factory`, `current` or `next`, lowercase; it is required, and an
-unknown value never reaches the handler.
+`<slot>` is one path segment naming an application slot: `factory` for the factory
+image, or `0`, `1`, … for the OTA slots, counting from `0` for the first one. It
+is required, and it has to be less than `slots - 1` (see `/system/slots` below);
+anything else, `ota0` included, is answered with `400` and the name of the error.
 
 **Paths are matched exactly, so a trailing slash is never optional.** The router
-matches a route only when the whole path has been consumed: `/system/status?slot=next`
-works, `/system/status/?slot=next` is a `404`. The one endpoint that *needs* the
-trailing slash is `POST /system/activate/` — it is registered as the root of a
-nested router, so `/system/activate/` is its entire path and `/system/activate`
-is a `404`.
+matches a route only when the whole path has been consumed: `/system/status/0`
+works, `/system/status/0/` is a `404`, and so is `/system/activate` with no slot
+at all.
 
-### `POST /system/upload`
+### `POST /system/upload/<slot>`
 
-The request body **is** the image — no multipart, no form field. `Content-Length`
-must be set and the body must be an application image (the `.bin`, not the ELF),
-in `FlashStorage::WRITE_SIZE` multiples. The body read timeout is one hour, which
-is far more than the upload needs but keeps a stalled client from pinning the
-device.
+Writes an application image into the slot named in the path. The request body
+**is** the image — no multipart, no form field. `Content-Length` must be set and
+the body must be an application image (the `.bin`, not the ELF), in
+`FlashStorage::WRITE_SIZE` multiples. The body read timeout is one hour, which is
+far more than the upload needs but keeps a stalled client from pinning the device.
 
-Failures come back as `400` with a short token — the name of the `SystemError`
-the upload ended with:
+The target partition is erased before the first byte is written, so an upload
+takes as long as erasing and writing the image does. Two targets are refused
+outright, with `OTA(Invalid)`: `factory`, which is written over USB only, and the
+slot the device booted from, where the erase would take the code it is executing
+with it. Which slot that is cannot always be worked out — see `/system/booted`
+below — so a client should also refuse those two itself rather than wait for the
+device to catch them.
+
+Failures arrive in one of two ways, and the difference matters:
+
+**A refusal, before a single byte of the body is read**, is a `400` carrying the
+name of the `SystemError` that refused it:
 
 | Token | Meaning |
 |---|---|
 | `Uploading` | another upload is already running |
+| `OTA(Invalid)` | the target is `factory`, or the slot the device booted from |
+| `OTA(NotSupported)` | there is no such slot, or `Content-Length` is 0 or not a multiple of `WRITE_SIZE` |
+
+**Anything that goes wrong after that is answered with `200`.** The request was
+accepted; what became of the image is reported by the `message` field of
+`/system/progress` (and by the slot's own state, once it is read back):
+
+| Token | Meaning |
+|---|---|
 | `OutOfMemory` | the image is larger than the target slot, or the stream ran long |
 | `Incomplete` | the stream ended before `Content-Length` bytes arrived |
 | `WriteFailure` | the connection failed while reading the body |
-| `OTA(NotSupported)` | there is nowhere to write: the partition table has no second application slot, **or** the OTA data partition could not be read (see the note below), or the flash refused the target |
+| `OTA(Invalid)` | the partition table has no such slot |
+| `OTA(NotSupported)` | the image does not fit, or the flash refused the target |
 | `OTA(OutOfBounds)` / `OTA(WriteProtected)` / `OTA(StorageError)` | the erase or the write itself failed |
 
-`OTA(NotSupported)` deserves its own note: the target slot is chosen from the OTA
-data partition, so **anything that makes that partition unreadable looks exactly
-like "no second slot"** — including the case where it holds bytes that are
-neither erased nor a valid entry (a stale region left behind by an older
-partition table, for instance). If an upload is refused with `NotSupported` while
-the partition table clearly has two application slots, inspect the OTA data
-partition rather than reflashing.
+**So a `200` does not mean the image is usable.** The response only says the
+bytes were taken; whether the result can boot is a separate question, answered by
+`/system/status/<slot>` — and if it cannot, `/system/progress` is the only place
+the reason is written down.
 
-The response only says the bytes were written. **Whether the result is usable is
-a separate question** — ask `/system/status?slot=next` afterwards.
+### `POST /system/activate/<slot>`
 
-### `POST /system/activate/`
+Selects the slot named in the path as the next one to boot, starts a countdown
+(5 s) and reboots. It is deliberately a `POST`: it changes what the device will
+boot, and it cannot be undone from the network. `factory` is accepted and means
+"clear the selection", which makes the next boot the factory image — the same
+state a USB flash leaves behind.
 
-Switches the boot slot and starts a countdown (5 s), after which the device
-reboots. It is deliberately a `POST`: it changes what the device will boot, and
-it cannot be undone from the network.
+`400` with a token is returned when the switch is refused: `NotSupported` or
+`Invalid` when the partition table has no such slot, `OTA(InvalidImage)` when the
+slot holds something that cannot boot, `Uploading` while an upload is running,
+`OTADataInvalid` when the partition table has no OTA data partition, and `OTA(…)`
+when that partition cannot be read or written.
 
-`400` with a token is returned when there is nothing to activate
-(`OTA(NotSupported)` for no second slot or an unreadable OTA data partition,
-`OTA(InvalidImage)` when the slot holds something that cannot boot, `Uploading`
-while an upload is running).
+**The check is made against the last known state of the slot, not against a fresh
+scan**, and a slot nobody has asked about has no state to check — activating it
+is refused with `OTA(InvalidImage)` even when it holds a perfectly good image.
+So `GET /system/inspect/<slot>` has to come first (an upload into the slot does
+the same thing). Both pages work that way: read the slot, then activate.
 
-One caveat, written out in the README's known limitations: activating a third
-time since the last USB flash is known to corrupt the OTA data partition (a
-defect in the crate this firmware builds its updates on). The device remains
-operational, but further uploads are refused until that partition is erased.
+The firmware erases the OTA-data sector it is about to write before every switch,
+and for `factory` it erases the whole partition instead: clearing the selection
+means **both** entries have to be blank, and an entry that has been programmed
+cannot be blanked by writing to it. An unreadable OTA-data partition is erased at
+boot, so switching is safe to repeat. The crate underneath does not erase that
+sector itself — see the README's known limitations for why the firmware has to do
+it.
+
+### `GET /system/slots` and `GET /system/booted`
+
+`/system/slots` answers with a plain decimal number: how many application slots
+the firmware has, factory included. The valid `<slot>` values are therefore
+`factory` and the numbers `0` to `slots - 2`.
+
+`/system/booted` answers with the index of the slot the device booted from, or
+with `/` when it could not tell. It works that out by asking the MMU which flash
+region is mapped and matching that against the partition table, which is not
+always answerable, so **a client must not assume the device can refuse an upload
+into the slot it is running from**: it refuses that slot when it knows which one
+it is, and `factory` in every case, but on `/` the client is the only thing left
+to catch it. A page that uploads should prefer an empty slot, and ask for
+confirmation when the target is not empty and the device cannot say what it
+booted from.
+
+### `GET /system/status/<slot>` and `GET /system/inspect/<slot>`
+
+Both answer with the same 12 fields (see below). They differ in whether the device
+looks at the flash:
+
+- `/system/status/<slot>` returns what the device already knows — the result of
+  the last scan of that slot. It touches no flash; poll this one.
+- `/system/inspect/<slot>` **scans the slot**: reads the image back out of flash,
+  walks its segments, hashes it with SHA-256 and compares that against the digest
+  appended to the image. That is the whole image read and hashed in software, on
+  the one core the door control and the Wi-Fi stack also run on, so it takes a
+  noticeable moment and competes with them. **Ask for it when the answer matters,
+  not on a timer** — a page's "read" button, or once after an upload.
+
+The scan is what fills the cache, and apart from an upload it is the only thing
+that does: a slot nobody has asked about reads back as `Unchecked`.
 
 ### Response formats
 
@@ -134,20 +196,30 @@ error names never contain one. Splitting on `|` is therefore always safe.
   `OTA(NotSupported)`.
 - byte counts are decimal, in bytes.
 
-**`/system/status?slot=<slot>`**
+**`/system/status/<slot>` and `/system/inspect/<slot>`**
 
 ```
 <state>|<segment_count>|<entry_address>|<chip_id>|<hash_appended>|<secure_version>| \
 <version>|<project>|<time>|<date>|<sha256>|<digest_sha256>
 ```
 
-If the slot is not in the partition table at all, the whole body is `/`. A body
-that is not exactly 12 fields means the device's output buffer overflowed and the
-response was cut short: treat it as an error, not as partial data to act on.
+A `<slot>` the partition table does not have is answered with `400` and the name
+of the error, never with a body. A body that is not exactly 12 fields means the
+device's output buffer overflowed and the response was cut short: treat it as an
+error, not as partial data to act on.
 
-- `state` — `Unavailable`, `Empty`, `Unknown`, `Broken`, `Unverified`,
-  `Foreign` or `Available`. Only `Unverified`, `Foreign` and `Available` can be
-  activated.
+- `state` — `Unchecked`, `Empty`, `Unknown`, `Broken`, `Unverified`, `Foreign` or
+  `Available`. Only `Unverified`, `Foreign` and `Available` can be activated, and
+  `Unchecked` is what a slot nobody has scanned reads back as.
+  - `Unchecked` — the device has not looked at this slot yet.
+  - `Empty` — no image header where one would start.
+  - `Unknown` — an ESP image, but not an application image: the header is there
+    and the application descriptor is not.
+  - `Broken` — an application image that fails its own structure or its digest.
+  - `Unverified` — sound, but it carries no appended digest to check itself
+    against.
+  - `Foreign` — sound, but built by something other than this project.
+  - `Available` — sound, and this project's.
 - `version`, `project`, `time` and `date` are plain ASCII text, printed up to the
   first NUL (they are NUL-padded in flash).
 - `hash_appended` is `1` or `0`; it says whether the image carries an appended
@@ -177,7 +249,7 @@ A `303` is followed automatically by browsers and by `fetch`, and the redirected
 request never reaches its handler, yet the client observes the target's `200`.
 **A client that inspects only the status code cannot distinguish "the handler
 ran" from "the request was redirected"**, so every request that changes state
-(`POST /system/upload`, `POST /system/activate/`, `GET /open`,
+(`POST /system/upload/<slot>`, `POST /system/activate/<slot>`, `GET /open`,
 `GET /setopen?state=…`) should check the response's `redirected` flag, or the
 final URL, before reporting success: a command issued during the countdown
 otherwise appears to have succeeded although it never ran.
@@ -187,6 +259,8 @@ otherwise appears to have succeeded although it never ran.
 - One request per connection, no keep-alive.
 - Authenticated endpoints cost a PBKDF2; a page that polls should stay at 1–2 s
   and then slow down.
+- Poll `/system/status/<slot>`, never `/system/inspect/<slot>`: the first reads a
+  cached value, the second reads and hashes the whole image on every call.
 - While a countdown runs, everything is redirected to the reboot page. A client
   that polls the countdown should treat that redirect as the "switch finished"
   signal and **not follow it** into the reboot page: following costs a fresh

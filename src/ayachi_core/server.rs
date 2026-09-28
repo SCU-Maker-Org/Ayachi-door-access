@@ -11,11 +11,11 @@ use pbkdf2::sha2::Sha256;
 use picoserve::extract::{FromRequest, FromRequestParts, Query};
 use picoserve::request::{RequestBody, RequestParts};
 use picoserve::response::{IntoResponse, NoContent, Redirect, Response, ResponseWriter, StatusCode};
-use picoserve::routing::{get, Layer, PathRouter, Next, post};
-use picoserve::{AppBuilder, ResponseSent, Router};
+use picoserve::routing::{get, Layer, PathRouter, Next, post, parse_path_segment};
+use picoserve::{AppBuilder, ResponseSent, Router, Timeouts};
 use serde::Deserialize;
-use crate::ayachi_core::system::{PartitionSlot, System, SystemError};
-use crate::ayachi_core::utils::{CompactFormat, FixedString};
+use crate::ayachi_core::system::{System, SystemError};
+use crate::ayachi_core::utils::{CompactFormat, ContainerExt, FixedString};
 
 // Types
 type AyachiApplication = Router<<AyachiServer as AppBuilder>::PathRouter>;
@@ -39,11 +39,6 @@ struct MaintenanceLayer;
 #[derive(Deserialize)]
 struct SetOpenQuery {
     state: u8
-}
-
-#[derive(Deserialize)]
-struct PartitionInfoQuery {
-    slot: PartitionSlot
 }
 
 // Statics
@@ -104,9 +99,9 @@ impl AppBuilder for AyachiServer {
                         .with_content_type("text/html; charset=utf-8")
                 }))
                 .nest("/activate", Router::new()
-                    .route("/", post(|_: Authorizer| async {
+                    .route(parse_path_segment::<FixedString<10>>(), post(|index: FixedString<10>, _: Authorizer| async {
                         let message = FixedString::<100>::new();
-                        match self.state.system.activate_next() {
+                        match System::get_index_by_str(index).and_then(|index| self.state.system.activate(index)) {
                             Ok(_) => Response::ok(message.write_format("Activating")),
                             Err(error) => Response::new(StatusCode::BAD_REQUEST, message.write_format(error))
                         }
@@ -115,8 +110,25 @@ impl AppBuilder for AyachiServer {
                         FixedString::<10>::from(self.state.system.activate_countdown().into_compact_format())
                     }))
                 )
-                .route("/status", get(move |_: Authorizer, Query(PartitionInfoQuery{ slot }): Query<PartitionInfoQuery>| async move {
-                    FixedString::<410>::from(self.state.system.get_partition_info(slot).into_compact_format())
+                .route("/booted", get(|_: Authorizer| async {
+                    FixedString::<10>::from(self.state.system.booted().into_compact_format())
+                }))
+                .route("/slots", get(|_: Authorizer| async {
+                    FixedString::<5>::from(System::slots().into_compact_format())
+                }))
+                .route(("/status", parse_path_segment::<FixedString<10>>()), get(|index: FixedString<10>, _: Authorizer| async {
+                    let message = FixedString::<450>::new();
+                    match System::get_index_by_str(index).and_then(|index| self.state.system.get_partition_info(index)) {
+                        Ok(info) => Response::ok(message.write_format(info.into_compact_format())),
+                        Err(error) => Response::new(StatusCode::BAD_REQUEST, message.write_format(error))
+                    }
+                }))
+                .route(("/inspect", parse_path_segment::<FixedString<10>>()), get(|index: FixedString<10>, _: Authorizer| async {
+                    let message = FixedString::<450>::new();
+                    match System::get_index_by_str(index).async_map(async |index| self.state.system.inspect_partition(index).await).await.flatten() {
+                        Ok(info) => Response::ok(message.write_format(info.into_compact_format())),
+                        Err(error) => Response::new(StatusCode::BAD_REQUEST, message.write_format(error))
+                    }
                 }))
                 .route("/resetting", get(|| async {
                     Response::ok(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/resetting.html")))
@@ -129,7 +141,7 @@ impl AppBuilder for AyachiServer {
                     Response::ok(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/maintenance.html")))
                         .with_content_type("text/html; charset=utf-8")
                 }))
-                .route("/upload", post(|_: Authorizer, _: Uploader| async {
+                .route(("/upload", parse_path_segment::<FixedString<10>>()), post(|_: FixedString<10>, _: Authorizer, _: Uploader| async {
                     Response::ok("Upload successfully")
                 }))
             )
@@ -178,11 +190,16 @@ impl<'r, State> FromRequestParts<'r, State> for Authorizer {
 impl<'r> FromRequest<'r, AyachiServerState> for Uploader {
     type Rejection = (StatusCode, FixedString<250>);
 
-    async fn from_request<R: Read>(state: &'r AyachiServerState, _: RequestParts<'r>, request_body: RequestBody<'r, R>) -> Result<Self, Self::Rejection> {
+    async fn from_request<R: Read>(state: &'r AyachiServerState, request_parts: RequestParts<'r>, request_body: RequestBody<'r, R>) -> Result<Self, Self::Rejection> {
         let content_length = request_body.content_length();
         let mut reader = request_body.reader().with_different_timeout(embassy_time::Duration::from_secs(3600)); // It's impossible to upload such a huge file or just wait for almost one hour
 
-        match state.system.upload(content_length, async |buffer| {
+        let index = match System::get_index_by_str(request_parts.path().segments().last().unwrap().0) {
+            Ok(index) => index,
+            Err(error) => return Err((StatusCode::BAD_REQUEST, error.into()))
+        };
+
+        match state.system.upload(index, content_length, async |buffer| {
             reader.read(buffer).await.map_err(|_| SystemError::WriteFailure)
         }).await {
             Ok(_) => Ok(Uploader),
@@ -232,7 +249,10 @@ impl<PathParameters> Layer<AyachiServerState, PathParameters> for MaintenanceLay
 // Tasks
 #[embassy_executor::task(pool_size = MAX_CONNECTIONS)]
 pub async fn server_task(server_app: &'static AyachiApplication, stack: Stack<'static>) {
-    static SERVER_CONFIG: picoserve::Config = picoserve::Config::const_default();
+    static SERVER_CONFIG: picoserve::Config = picoserve::Config::new(Timeouts {
+        write: embassy_time::Duration::from_secs(2),
+        ..Timeouts::const_default()
+    });
 
     let mut http_buffer = [0; 2048];
     let mut rx_buffer = [0; 1024];

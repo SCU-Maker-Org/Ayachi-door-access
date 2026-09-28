@@ -46,6 +46,57 @@ hostname = "ayachinene"
 # TCP port for the web control panel. 80 keeps the URL free of a port number.
 port = 80
 
+# How many panics in a row the device tolerates before it gives up on the
+# running image and returns to the factory one.
+#
+# Every panic - including a hardware fault, which the firmware turns into one -
+# adds to a count kept in a register that survives a software reset. When the
+# count reaches this number, the next boot erases the OTA boot selection, so the
+# bootloader falls back to the factory slot: a device that panics on every boot
+# recovers by itself instead of looping forever. 0 goes back to the factory
+# image on the very first panic.
+#
+# The count is cleared when an update is activated. It is not cleared by an
+# ordinary successful boot, so panics spread over months add up - see the
+# known limitations in the README.
+panic_retry = 3
+
+
+# ---------------------------------------------------------------------------
+#  Flash layout                                       [THE PROJECT'S FOOTPRINT]
+# ---------------------------------------------------------------------------
+
+[memory]
+# These settings are the project's footprint: they decide the partition table,
+# and with it how much of the module this firmware claims and how that space is
+# divided. Building through `cargo run` generates that table and flashes it; a
+# hand-written flash has to pass a table that agrees.
+#
+# How many OTA application slots the firmware should know about, not counting
+# the factory image. Must match the partition table actually in flash: the
+# firmware addresses slots by index (`factory`, then 0, 1, ...), and a slot this
+# number promises but the table does not contain is answered with an error
+# rather than silently ignored. 16 is the ceiling (the bootloader's slot
+# sub-types run out there).
+slots = 2
+
+# Total size of the module's flash, in KB. 8192 is 8 MB. The cargo runner sizes
+# the partition table it generates from this number: the factory image goes
+# first, as large as the application image rounded up to a 64 KB block, and the
+# slots share whatever is left.
+flash_size = 8192
+
+# Slots that get a fixed size and a name instead of an even share, in the order
+# they should follow the factory image:
+#
+#     [[memory.preset]]
+#     name = "spare"
+#     size = 512          # KB
+#
+# Each entry occupies one of `slots`, so `slots` must be at least this long.
+# Empty means every slot divides the space that is left.
+preset = []
+
 
 # ---------------------------------------------------------------------------
 #  Door behaviour

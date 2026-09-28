@@ -1,7 +1,8 @@
 // Made by Han_feng
 
+use super::{SLOTS, factory_request_reset};
+use super::utils::{ArrayResult, CompactFormat, TextBytes};
 use crate::stmt_join;
-use super::utils::{CompactFormat, TextBytes, ContainerExt};
 use core::cell::{Cell, RefCell};
 use core::fmt::{Debug, Formatter, Write};
 use core::ops::DerefMut;
@@ -15,12 +16,11 @@ use embedded_storage::nor_flash::NorFlash;
 use esp_bootloader_esp_idf::EspAppDesc;
 use esp_bootloader_esp_idf::ota::OtaImageState;
 use esp_bootloader_esp_idf::ota_updater::OtaUpdater;
-use esp_bootloader_esp_idf::partitions::{AppPartitionSubType, Error, FlashRegion, NorFlashRegion, PARTITION_TABLE_MAX_LEN, PartitionEntry, PartitionType, read_partition_table};
+use esp_bootloader_esp_idf::partitions::{read_partition_table, AppPartitionSubType, DataPartitionSubType, Error, FlashRegion, NorFlashRegion, PartitionEntry, PartitionType, PARTITION_TABLE_MAX_LEN};
 use esp_hal::__macro_implementation::static_cell::StaticCell;
 use esp_hal::peripherals::FLASH;
 use esp_storage::FlashStorage;
 use pbkdf2::sha2::{Digest, Sha256};
-use serde::Deserialize;
 
 // Enums
 #[derive(Copy, Clone, Debug, defmt::Format)]
@@ -29,6 +29,7 @@ pub enum SystemError {
     OutOfMemory,
     Incomplete,
     WriteFailure,
+    OTADataInvalid,
     OTA(Error),
 }
 
@@ -47,7 +48,8 @@ pub enum UploadState {
 #[derive(Default, Eq, PartialEq, Copy, Clone, Debug, defmt::Format)]
 pub enum PartitionState {
     #[default]
-    Unavailable,
+    Unchecked,
+    ReadFailed,
     Empty,
     Unknown,
     Broken,
@@ -56,28 +58,20 @@ pub enum PartitionState {
     Available
 }
 
-#[derive(Eq, PartialEq, Copy, Clone, defmt::Format, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PartitionSlot{
-    Factory,
-    Current,
-    Next
-}
-
 // Structs
 pub struct System<'u> {
     uploading: AtomicBool,
+    booted: Option<usize>,
+    ota_entry: Option<PartitionEntry>,
     activate_countdown: AtomicU32,
-    activate_signal: Signal<CriticalSectionRawMutex, ()>,
+    activate_signal: Signal<CriticalSectionRawMutex, usize>,
     inner: CriticalSectionMutex<SystemRaw<'u>>
 }
 
 struct SystemRaw<'u> {
     flash: RefCell<FlashStorage<'u>>,
     upload_process: RefCell<UploadProcess>,
-    factory: Option<Partition>,
-    current: Option<Partition>,
-    next: Option<Partition>,
+    partition_slots: [Option<Partition>; SLOTS],
 }
 
 #[derive(Default, Copy, Clone, defmt::Format)]
@@ -96,6 +90,9 @@ pub struct Partition {
 #[derive(Default, Copy, Clone, defmt::Format)]
 pub struct PartitionInfo {
     pub state: PartitionState,
+    pub name: TextBytes<16>,
+    pub capacity: u32,
+    pub size: u32,
 
     // Image header
     pub segment_count: Option<u8>,
@@ -125,48 +122,74 @@ impl<'u> System<'u> {
         let mut flash = FlashStorage::new(flash).multicore_auto_park();
         let mut buffer = [0; PARTITION_TABLE_MAX_LEN];
 
-        let next_type = OtaUpdater::new(&mut flash, &mut buffer).ok().and_then(|mut updater| updater.next_partition().map(|(_, next_type)| next_type).ok());
+        let mut booted = None;
+        let mut ota_entry = None;
+        let mut partition_slots = [const { None }; SLOTS];
+        if let Ok(table) = read_partition_table(&mut flash, &mut buffer) {
+            booted = table.booted_partition().ok().flatten().and_then(|booted_entry| match booted_entry.partition_type() {
+                PartitionType::App(subtype) => Self::get_index(subtype).ok(),
+                _ => None
+            });
 
-        let (factory, current, next) = match read_partition_table(&mut flash, &mut buffer) {
-            Ok(table) => (
-                    table.find_partition(PartitionType::App(AppPartitionSubType::Factory)).ok().flatten(),
-                    table.booted_partition().ok().flatten(),
-                    next_type.map(|next_type| table.find_partition(PartitionType::App(next_type)).ok()).flatten().flatten()
-            ),
-            Err(_) => (None, None, None),
-        };
+            for entry in table.iter() {
+                match entry.partition_type() {
+                    PartitionType::App(subtype) if let Ok(index) = Self::get_index(subtype) => {
+                        partition_slots[index] = Some(Partition::new(entry));
+                    }
+                    PartitionType::Data(DataPartitionSubType::Ota) => {
+                        ota_entry = Some(entry);
+                    }
+                    _ => ()
+                }
+            }
+        }
+
+        // check the ota data
+        if let Some(entry) = ota_entry && let Ok(mut updater) = OtaUpdater::new(&mut flash, &mut buffer) && let Ok(mut data) = updater.ota_data() && let Err(error) = data.current_app_partition() {
+            defmt::warn!("OTA data is broken: {}", error);
+            let mut ota_region = entry.as_flash_region(&mut flash);
+            match ota_region.erase(0, ota_region.capacity() as u32) {
+                Ok(_) => defmt::info!("OTA data erased, and it will return to factory on the next restart if nothing has been activated"),
+                Err(_) => {
+                    defmt::warn!("Failed to erase the OTA data, and the function of activation will be disabled");
+                    ota_entry = None;
+                },
+            }
+        }
 
         let system = System {
             uploading: AtomicBool::new(false),
+            booted, ota_entry,
             activate_countdown: AtomicU32::new(u32::MAX),
             activate_signal: Signal::new(),
             inner: CriticalSectionMutex::new(SystemRaw {
                 flash: RefCell::new(flash),
                 upload_process: RefCell::new(UploadProcess::default()),
-                factory: factory.map(|entry| Partition::new(entry)),
-                current: current.map(|entry| Partition::new(entry)),
-                next: next.map(|entry| Partition::new(entry))
+                partition_slots
             })
         };
 
-        for (entry, slot) in [
-            (factory, PartitionSlot::Factory),
-            (current, PartitionSlot::Current),
-            (next, PartitionSlot::Next)
-        ] {
-            entry.async_map(async |entry| system.inspect(entry, None).await).await.map(|info| system.set_info(slot, info));
+        for index in 0..System::slots() {
+            match system.inspect_partition(index).await {
+                Ok(info) => defmt::info!("Partition state({}): {}", index, info.state),
+                Err(error) => defmt::warn!("Failed to inspect partition({}): {}", index, error),
+            }
         }
 
         SYSTEM.init(system)
     }
 
-    pub async fn upload<F, E>(&self, file_size: usize, file_stream: F) -> Result<(), SystemError>
+    pub async fn upload<F, E>(&self, index: usize, file_size: usize, file_stream: F) -> Result<(), SystemError>
     where
         F: AsyncFnMut(&mut [u8]) -> Result<usize, E>,
         E: Into<SystemError>
     {
-        if file_size == 0 || file_size % FlashStorage::WRITE_SIZE != 0 {
+        if file_size == 0 || file_size % FlashStorage::WRITE_SIZE != 0 || index >= SLOTS {
             return Err(Error::NotSupported.into());
+        }
+
+        if index <= 0 || self.booted.is_some_and(|booted| booted == index) {
+           return Err(Error::Invalid.into());
         }
 
         if self.uploading.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
@@ -178,36 +201,66 @@ impl<'u> System<'u> {
         self.process(|process| {
             process.state = UploadState::Received;
             process.message = None;
+            process.erase = [0; 2];
+            process.write = [0; 2];
         });
 
-        if let Err(error) = self.system_upload(file_size, file_stream).await && let Some(next) = self.inner.lock(|system| {
+        if let Err(error) = self.system_upload(index, file_size, file_stream).await && let Some(entry) = self.inner.lock(|system| {
             let mut process = system.upload_process.borrow_mut();
             process.message = Some(error);
-            (process.state != UploadState::Received).then_some(system.next.as_ref().map(|next| next.entry)).flatten()
+            (process.state != UploadState::Received).then_some(system.partition_slots[index].as_ref().map(|next| next.entry)).flatten()
         }) {
-            self.set_info(PartitionSlot::Next, self.inspect(next, None).await);
+            self.set_partition_info(index, self.inspect(entry, None).await)?;
         }
 
         Ok(())
     }
 
-    pub fn activate_next(&self) -> Result<(), SystemError> {
+    pub fn activate(&self, index: usize) -> Result<(), SystemError> {
         static COUNTDOWN_SECONDS: u32 = 5;
 
-        self.check_activatable()?;
+        self.check_activatable(index)?;
 
-        self.flash(|flash| -> Result<(), Error> {
+        let Some(ota_entry) = self.ota_entry else {
+            return Err(SystemError::OTADataInvalid);
+        };
+
+        self.flash(|flash| -> Result<(), SystemError> {
+            let mut ota_region = ota_entry.as_flash_region(flash);
+
+            if index == 0 {
+                // If reset to factory, we have to erase all the ota data and keep it clean
+                ota_region.erase(0, ota_region.capacity() as u32)?;
+                return Ok(());
+            }
+
+            // erase the ota data
+            let erase_offset = match [0, 1].map(|i| {
+                let mut sequence = [0; 4];
+                ota_region.read(i * FlashStorage::SECTOR_SIZE, &mut sequence)?;
+                Ok::<_, Error>(u32::from_le_bytes(sequence))
+            }).collect_result()? {
+                [u32::MAX, u32::MAX] => 0,
+                [u32::MAX, _] => 0,
+                [_, u32::MAX] => 1,
+                [a, b] if a > b => 1,
+                _ => 0,
+            } * FlashStorage::SECTOR_SIZE;
+
+            ota_region.erase(erase_offset, erase_offset + FlashStorage::SECTOR_SIZE)?;
+
+            // select the certain partition
             let mut buffer = [0; PARTITION_TABLE_MAX_LEN];
             let mut updater = OtaUpdater::new(flash, &mut buffer)?;
 
-            updater.activate_next_partition()?;
+            updater.ota_data()?.set_current_app_partition(Self::get_type(index)?)?;
             updater.set_current_ota_state(OtaImageState::New)?;
 
             Ok(())
         })?;
 
         self.activate_countdown.store(COUNTDOWN_SECONDS, Ordering::Relaxed);
-        self.activate_signal.signal(());
+        self.activate_signal.signal(index);
 
         Ok(())
     }
@@ -225,43 +278,48 @@ impl<'u> System<'u> {
         self.process(|process| *process)
     }
 
-    pub fn get_partition_info(&self, slot: PartitionSlot) -> Option<PartitionInfo> {
-        self.partition(slot, |partition| partition.map(|partition| partition.info.get()))
+    pub fn get_partition_info(&self, index: usize) -> Result<PartitionInfo, SystemError> {
+        self.partition(index, |partition| partition.info.get())
     }
 
-    pub fn get_partition_infos(&self) -> [Option<PartitionInfo>; 3] {
-        self.inner.lock(|system| [
-            system.factory.as_ref().map(|factory| factory.info.get()),
-            system.current.as_ref().map(|current| current.info.get()),
-            system.next.as_ref().map(|next| next.info.get()),
-        ])
+    pub async fn inspect_partition(&self, index: usize) -> Result<PartitionInfo, SystemError> {
+        let entry = self.partition(index, |partition| partition.entry)?;
+        let info = self.inspect(entry, None).await;
+        self.set_partition_info(index, info)?;
+        Ok(info)
+    }
+
+    pub fn booted(&self) -> Option<usize> {
+        self.booted
+    }
+
+    pub fn slots() -> usize {
+        SLOTS
     }
 }
 
 impl<'u> System<'u> {
-    async fn system_upload<F, E>(&self, file_size: usize, mut file_stream: F) -> Result<(), SystemError>
+    async fn system_upload<F, E>(&self, index: usize, file_size: usize, mut file_stream: F) -> Result<(), SystemError>
     where
         F: AsyncFnMut(&mut [u8]) -> Result<usize, E>,
         E: Into<SystemError>
     {
-        let Some(target_entry) = self.inner.lock(|system| system.next.as_ref().map(|next| next.entry)) else {
-            return Err(Error::NotSupported.into());
-        };
+        let entry = self.partition(index, |partition| partition.entry)?;
 
         // Erase the partition
-        let (distribution, total) = Self::calculate_erase_distribution(file_size, self.region(target_entry, |target| target.capacity()))?;
+        let (distribution, total) = Self::calculate_erase_distribution(file_size, self.region(entry, |target| target.capacity()))?;
         let mut erased = 0;
         self.inner.lock(|system| {
             let mut process = system.upload_process.borrow_mut();
             process.state = UploadState::Erasing;
             process.erase = [erased, total as u32];
 
-            system.next.as_ref().map(|next| next.info.set(PartitionInfo::default()));
+            system.partition_slots[index].as_ref().map(|next| next.info.set(PartitionInfo::default()));
         });
 
         for _ in 0..distribution[0] {
             // block erase
-            self.region(target_entry, |mut target| target.erase(erased, erased + FlashStorage::BLOCK_SIZE))?;
+            self.region(entry, |mut target| target.erase(erased, erased + FlashStorage::BLOCK_SIZE))?;
             erased += FlashStorage::BLOCK_SIZE;
             self.process(|process| process.erase[0] = erased);
             yield_now().await;
@@ -269,7 +327,7 @@ impl<'u> System<'u> {
 
         for _ in 0..distribution[1] {
             // sector erase
-            self.region(target_entry, |mut target| target.erase(erased, erased + FlashStorage::ERASE_SIZE as u32))?;
+            self.region(entry, |mut target| target.erase(erased, erased + FlashStorage::ERASE_SIZE as u32))?;
             erased += FlashStorage::ERASE_SIZE as u32;
             self.process(|process| process.erase[0] = erased);
             yield_now().await;
@@ -293,7 +351,7 @@ impl<'u> System<'u> {
                     }
 
                     if buffer_length > 0 {
-                        self.nor_region(target_entry, |mut target| target.write(written, &write_buffer[..buffer_length]))??;
+                        self.nor_region(entry, |mut target| target.write(written, &write_buffer[..buffer_length]))??;
                         self.process(|process| process.write[0] = written + buffer_length as u32);
                     }
 
@@ -307,7 +365,7 @@ impl<'u> System<'u> {
                     }
 
                     if buffer_length == write_buffer.len() {
-                        self.nor_region(target_entry, |mut target| target.write(written, &write_buffer))??;
+                        self.nor_region(entry, |mut target| target.write(written, &write_buffer))??;
                         written += buffer_length as u32;
                         self.process(|process| process.write[0] = written);
                         buffer_length = 0;
@@ -320,11 +378,11 @@ impl<'u> System<'u> {
         // identify
         self.process(|process| process.state = UploadState::Identifying);
 
-        let partition_info = self.inspect(target_entry, Some(file_size)).await;
+        let partition_info = self.inspect(entry, Some(file_size)).await;
 
         self.inner.lock(|system| {
             system.upload_process.borrow_mut().state = partition_info.activatable().then_some(UploadState::Ready).unwrap_or(UploadState::Failed);
-            system.next.as_ref().map(|next| next.info.set(partition_info));
+            system.partition_slots[index].as_ref().map(|next| next.info.set(partition_info));
         });
 
         Ok(())
@@ -343,9 +401,14 @@ impl<'u> System<'u> {
         static PROJECT_NAME: &[u8] = env!("CARGO_PKG_NAME").as_bytes();
 
         let mut result = PartitionInfo::default();
-        let mut buffer = [0; PARTITION_HEADER_LENGTH];
 
+        result.capacity = entry.len();
+        let max_length = result.name.len().min(entry.label().len());
+        result.name[..max_length].copy_from_slice(&entry.label()[..max_length]);
+
+        let mut buffer = [0; PARTITION_HEADER_LENGTH];
         if self.region(entry, |mut region| region.read(0, &mut buffer)).is_err() {
+            result.state = PartitionState::ReadFailed;
             return result;
         };
 
@@ -398,6 +461,9 @@ impl<'u> System<'u> {
 
         let hash_appended = result.hash_appended.unwrap_or(false);
         let image_length = (cursor + 1).next_multiple_of(16); // checksum: 1 byte
+
+        result.size = image_length;
+
         if expected_length.is_some_and(|expected| image_length + hash_appended.then_some(32).unwrap_or(0) != expected as u32) {
             result.state = PartitionState::Broken;
             return result;
@@ -457,12 +523,8 @@ impl<'u> System<'u> {
         Ok(hasher.finalize().into())
     }
 
-    fn check_activatable(&self) -> Result<(), SystemError> {
-        let Some(info) = self.get_partition_info(PartitionSlot::Next) else {
-            return Err(Error::NotSupported.into());
-        };
-
-        if !info.activatable() {
+    fn check_activatable(&self, index: usize) -> Result<(), SystemError> {
+        if !self.get_partition_info(index)?.activatable() {
             return Err(Error::InvalidImage.into());
         }
 
@@ -473,8 +535,8 @@ impl<'u> System<'u> {
         Ok(())
     }
 
-    fn set_info(&self, slot: PartitionSlot, info: PartitionInfo) {
-        self.partition(slot, |partition| partition.map(|partition| partition.info.set(info)));
+    fn set_partition_info(&self, index: usize, info: PartitionInfo) -> Result<(), SystemError> {
+        self.partition(index, |partition| partition.info.set(info))
     }
 }
 
@@ -500,12 +562,65 @@ impl<'u> System<'u> {
     }
 
     #[inline]
-    fn partition<T>(&self, slot: PartitionSlot, partition_fun: impl FnOnce(Option<&Partition>) -> T) -> T {
-        self.inner.lock(|system| partition_fun(match slot {
-            PartitionSlot::Factory => system.factory.as_ref(),
-            PartitionSlot::Current => system.current.as_ref(),
-            PartitionSlot::Next => system.next.as_ref(),
-        }))
+    fn partition<T>(&self, index: usize, partition_fun: impl FnOnce(&Partition) -> T) -> Result<T, SystemError> {
+        self.inner.lock(|system| Ok(partition_fun(system.partition_slots.get(index).ok_or(Error::NotSupported)?.as_ref().ok_or(Error::Invalid)?)))
+    }
+
+    #[inline]
+    fn get_index(partition_type: AppPartitionSubType) -> Result<usize, SystemError> {
+        Ok(match partition_type {
+            AppPartitionSubType::Factory => 0,
+            AppPartitionSubType::Ota0 => 1,
+            AppPartitionSubType::Ota1 => 2,
+            AppPartitionSubType::Ota2 => 3,
+            AppPartitionSubType::Ota3 => 4,
+            AppPartitionSubType::Ota4 => 5,
+            AppPartitionSubType::Ota5 => 6,
+            AppPartitionSubType::Ota6 => 7,
+            AppPartitionSubType::Ota7 => 8,
+            AppPartitionSubType::Ota8 => 9,
+            AppPartitionSubType::Ota9 => 10,
+            AppPartitionSubType::Ota10 => 11,
+            AppPartitionSubType::Ota11 => 12,
+            AppPartitionSubType::Ota12 => 13,
+            AppPartitionSubType::Ota13 => 14,
+            AppPartitionSubType::Ota14 => 15,
+            AppPartitionSubType::Ota15 => 16,
+            _ => return Err(Error::NotSupported.into()),
+        })
+    }
+
+    #[inline]
+    pub fn get_index_by_str(string: impl AsRef<str>) -> Result<usize, SystemError> {
+        Ok(match string.as_ref() {
+            "factory" => 0,
+            idx if let Ok(index) = idx.parse::<usize>() && index < 16 => index + 1,
+            _ => return Err(Error::NotSupported.into()),
+        })
+    }
+
+    #[inline]
+    fn get_type(index: usize) -> Result<AppPartitionSubType, SystemError> {
+        Ok(match index {
+            0 => AppPartitionSubType::Factory,
+            1 => AppPartitionSubType::Ota0,
+            2 => AppPartitionSubType::Ota1,
+            3 => AppPartitionSubType::Ota2,
+            4 => AppPartitionSubType::Ota3,
+            5 => AppPartitionSubType::Ota4,
+            6 => AppPartitionSubType::Ota5,
+            7 => AppPartitionSubType::Ota6,
+            8 => AppPartitionSubType::Ota7,
+            9 => AppPartitionSubType::Ota8,
+            10 => AppPartitionSubType::Ota9,
+            11 => AppPartitionSubType::Ota10,
+            12 => AppPartitionSubType::Ota11,
+            13 => AppPartitionSubType::Ota12,
+            14 => AppPartitionSubType::Ota13,
+            15 => AppPartitionSubType::Ota14,
+            16 => AppPartitionSubType::Ota15,
+            _ => return Err(Error::NotSupported.into()),
+        })
     }
 
     #[inline]
@@ -572,6 +687,9 @@ impl CompactFormat for PartitionInfo {
     fn compact_format(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         stmt_join!(f.write_char('|')?;
             self.state.fmt(f)?;
+            self.name.compact_format(f)?;
+            self.capacity.compact_format(f)?;
+            self.size.compact_format(f)?;
             self.segment_count.compact_format(f)?;
             self.entry_address.compact_format(f)?;
             self.chip_id.compact_format(f)?;
@@ -604,7 +722,7 @@ impl From<Error> for SystemError {
 #[embassy_executor::task]
 pub async fn system_task(system: &'static System<'static>) {
     loop {
-        system.activate_signal.wait().await;
+        let index = system.activate_signal.wait().await;
         let Some(mut count_down) = system.activate_countdown() else {
             continue;
         };
@@ -616,7 +734,8 @@ pub async fn system_task(system: &'static System<'static>) {
         }
 
         // Final guard, prevent invalid signal
-        if system.check_activatable().is_ok() {
+        if system.check_activatable(index).is_ok() {
+            factory_request_reset();
             esp_hal::system::software_reset();
         }
 

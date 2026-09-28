@@ -83,25 +83,31 @@ footer a{color:var(--accent); text-decoration:none}
 
   function setWaiting() {
     titleEl.textContent = '正在重启';
-    detailEl.textContent = '设备正在重启，等待恢复响应';
+    detailEl.textContent = '设备正在重启，等待其恢复响应';
   }
 
   /* 唯一的信号源就是 /system/activate/countdown（未鉴权、响应只是一个数字）：
        - 整条响应是数字 → 倒计时还在跑（5…1）；读到 0 就进入"等待重启"
-       - 请求被重定向（r.redirected）→ 倒计时早结束了，而设备还在答话
-         = 它已经回来（或压根没重启）
+       - 请求被重定向 → 倒计时早结束了，而设备还在答话 = 它已经回来（或压根没重启）
        - 请求失败或超时 → 设备正在重启，继续等
      收尾交给服务端：倒计时一结束它就把这条路径 303 到 /system/，所以 reload
-     本页就等于"跟着那个 303 走"，落地在哪由服务端决定，这里不用知道。 */
+     本页就等于"跟着那个 303 走"，落地在哪由服务端决定，这里不用知道。
+
+     注意 redirect:'manual'：**绝不能跟着那个 303 走** —— 目标是整个系统页（36 KB），
+     跟着跳的话每一轮都要下一次，而这一轮 3 秒后就被超时掐掉，设备那边就留下一堆
+     写了一半的响应（日志里的 writeError）；更糟的是被掐 = fetch reject = 落到
+     "继续等"那条路，永远不触发重载。所以只取"被重定向了"这个事实。 */
   function poll() {
     if (done) { return; }
 
     fetch('/system/activate/countdown', {
       cache: 'no-store',
+      redirect: 'manual',                  // 手动重定向：只拿"跳过了"这个信号，不跟过去
       signal: AbortSignal.timeout(3000),   // 设备掉线时把"挂住"变成"失败"
     })
       .then(function (r) {
-        if (r.redirected) { done = true; location.reload(); return null; }
+        // manual 模式下响应是 opaqueredirect（status 0，拿不到 Location）
+        if (r.redirected || r.type === 'opaqueredirect') { done = true; location.reload(); return null; }
         return r.text();
       })
       .then(function (t) {
@@ -113,7 +119,7 @@ footer a{color:var(--accent); text-decoration:none}
         var n = Number(m[1]);
         if (n > 0) {
           titleEl.textContent = '正在重启 · ' + n + ' 秒';
-          detailEl.textContent = '固件已切换，倒计时结束后设备重启。';
+          detailEl.textContent = '固件已切换，倒计时结束后设备将重启。';
         } else {
           setWaiting();                          // 读到 0：倒计时结束，等它断电重启
         }

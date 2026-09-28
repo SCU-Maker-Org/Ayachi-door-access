@@ -1,7 +1,9 @@
 // Made by Han_feng
 
 use core::fmt::{Arguments, Debug, Display, Formatter, Write};
+use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
+use core::str::FromStr;
 use embassy_executor::{SpawnToken, Spawner};
 use picoserve::response::Content;
 
@@ -38,6 +40,12 @@ pub trait ContainerExt<T>: Sized {
     type AsyncMapped<U>;
 
     fn async_map<U>(self, f: impl AsyncFnOnce(T) -> U) -> impl Future<Output = Self::AsyncMapped<U>>;
+}
+
+pub trait ArrayResult<const N: usize> {
+    type Item;
+    type Error;
+    fn collect_result(self) -> Result<[Self::Item; N], Self::Error>;
 }
 
 pub trait CompactFormat {
@@ -106,6 +114,22 @@ impl<const N: usize> Write for FixedString<N> {
     }
 }
 
+impl<const N: usize> FromStr for FixedString<N> {
+    type Err = core::fmt::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut result = Self::new();
+        result.write_str(s)?;
+        Ok(result)
+    }
+}
+
+impl<const N: usize> AsRef<str> for FixedString<N> {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
 impl<const N: usize> Content for FixedString<N> {
     fn content_type(&self) -> &'static str {
         "text/plain; charset=utf-8"
@@ -117,6 +141,12 @@ impl<const N: usize> Content for FixedString<N> {
 
     async fn write_content<W: picoserve::io::Write>(self, mut writer: W) -> Result<(), W::Error> {
         writer.write_fmt(format_args!("{}", self.as_str())).await
+    }
+}
+
+impl<const N: usize> Default for TextBytes<N> {
+    fn default() -> Self {
+        Self([0; N])
     }
 }
 
@@ -207,7 +237,26 @@ impl<T, E> ContainerExt<T> for Result<T, E>{
     }
 }
 
-impl_compact_format!(u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, f32, f64, char);
+impl<T, E, const N: usize> ArrayResult<N> for [Result<T, E>; N] {
+    type Item = T;
+    type Error = E;
+
+    fn collect_result(self) -> Result<[Self::Item; N], Self::Error> {
+        let mut result = MaybeUninit::uninit();
+        let mut pointer =result.as_mut_ptr() as *mut T;
+
+        for item in self {
+            unsafe {
+                pointer.write(item?);
+                pointer = pointer.add(1);
+            }
+        }
+
+        Ok(unsafe { result.assume_init() })
+    }
+}
+
+impl_compact_format!(u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize, f32, f64, char);
 
 impl CompactFormat for bool {
     fn compact_format(&self, f: &mut Formatter<'_>) -> core::fmt::Result {

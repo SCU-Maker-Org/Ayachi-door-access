@@ -7,7 +7,7 @@ extern crate alloc;
 
 pub mod ayachi_core;
 
-use ayachi_core::{MAX_CONNECTIONS, WIFI_PASSWORD, WIFI_RETRY_DELAY, WIFI_SSID};
+use ayachi_core::{MAX_CONNECTIONS, WIFI_PASSWORD, WIFI_RETRY_DELAY, WIFI_SSID, factory_request};
 use ayachi_core::door::{Door, door_task};
 use ayachi_core::mdns::{MdnsAnswers, mdns_task};
 use ayachi_core::network::{Network, network_task};
@@ -30,6 +30,8 @@ const HEAP_SIZE: usize = 80; // KB
 #[esp_rtos::main]
 async fn main(spawner: embassy_executor::Spawner) {
     let peripherals = esp_hal::init(esp_hal::Config::default());
+
+    factory_request(&peripherals.FLASH);
 
     esp_alloc::heap_allocator!(size: HEAP_SIZE * 1024);
 

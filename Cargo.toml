@@ -1,6 +1,6 @@
 [package]
 name = "ayachi-door-access"
-version = "0.2.0-beta"
+version = "0.2.0"
 edition = "2024"
 authors = ["Han_feng"]
 
@@ -9,7 +9,7 @@ authors = ["Han_feng"]
 esp-hal = { version = "1.2.1", features = ["esp32s3", "defmt", "unstable"] }
 esp-radio = { version = "1.0.0-beta.1", features = ["esp32s3", "wifi", "defmt"] }
 esp-rtos = { version = "0.4.0", features = ["esp32s3", "embassy", "esp-radio", "esp-alloc", "defmt"] }
-esp-backtrace = { version = "0.20.0", features = ["esp32s3", "panic-handler", "defmt"] }
+esp-backtrace = { version = "0.20.0", features = ["esp32s3", "panic-handler", "custom-halt", "defmt"] }
 esp-println = { version = "0.18.0", features = ["esp32s3", "timestamp", "defmt-espflash"] }
 esp-alloc = { version = "0.11.0", features = ["esp32s3", "global-allocator", "defmt"] }
 esp-bootloader-esp-idf = { version = "0.6.0", features = ["esp32s3", "embedded-storage", "defmt"] }

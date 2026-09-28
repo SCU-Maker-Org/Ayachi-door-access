@@ -37,8 +37,7 @@ h1{font-size:24px; font-weight:700; letter-spacing:-.02em}
 
 .panel{background:var(--card); border-radius:18px; padding:20px; margin-bottom:16px;
        box-shadow:0 1px 3px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.06)}
-/* 卡片头部固定两行：第一行 名称 + 状态徽章，第二行 用途说明。
-   这样三张卡的头部高度一致，不必靠压缩字数去凑对齐。 */
+/* 卡片头部两行：第一行 名称 + 状态徽章，第二行 用途说明 */
 h2{font-size:15px; font-weight:600; margin-bottom:14px;
    display:flex; align-items:center; flex-wrap:wrap; gap:4px 8px}
 h2 .badge{margin-left:auto}
@@ -58,9 +57,16 @@ h2 .role{flex-basis:100%; font-size:12px; font-weight:400; color:var(--muted)}
 .bar > i{display:block; height:100%; width:0; border-radius:4px; background:var(--accent);
          transition:width .3s ease}
 
+/* 卡片标题下面那条：这个槽被镜像占了多少（名称 / 容量 / 占用 / 状态不进字段表，它们在标题、这条和徽章上）。
+   固定用主题色：分区内容正常不会变，只有上传才会，所以不需要靠颜色示警 */
+.sizebar{height:8px; border-radius:4px; background:var(--bg); overflow:hidden; margin:-4px 0 6px}
+.sizebar > i{display:block; height:100%; width:0; border-radius:4px; background:var(--accent);
+             transition:width .3s ease}
+.sizebar-text{margin:0 0 14px; font-size:12px; color:var(--muted)}
+.sizebar-text:empty{display:none}
+
 .rows{display:grid; gap:1px; background:var(--line); border-radius:12px; overflow:hidden}
 .actions{display:grid; gap:8px; margin-top:12px}
-.actions:empty{margin-top:0}
 .actions.two{grid-template-columns:1fr 1fr}
 .actions button{width:100%; min-height:44px; padding:10px 16px;
   font:inherit; font-size:14px; font-weight:500; color:var(--text);
@@ -72,6 +78,27 @@ h2 .role{flex-basis:100%; font-size:12px; font-weight:400; color:var(--muted)}
 .actions button:disabled{opacity:.4; cursor:default; transform:none}
 /* 「刷新」带上这个：设备侧刚跑完一次上传/校验，本地这份可能已经过期 */
 .actions button.stale{border-color:var(--accent); color:var(--accent)}
+/* 「激活」占满一整行：它改的是设备下一次启动的分区，和上面两个不是一类动作 */
+.actions button.go{grid-column:1 / -1; border-color:var(--accent); color:var(--accent);
+                   font-weight:600}
+.actions button.go:disabled{border-color:var(--line); color:var(--text)}
+
+/* 结论一行（说明为什么能 / 不能切换），没有结论时不占位置 */
+.hint{margin-top:12px; font-size:12.5px; color:var(--muted); line-height:1.7}
+#phaseHint:empty{display:none}       /* 进度那一行的说明同理 */
+.hint:empty{display:none}
+.hint[data-kind="err"]{color:var(--danger)}
+
+/* ── 确认 / 说明条（和 maintenance.html 同一套）── */
+.warn{margin-top:12px; padding:12px 14px; border-radius:12px;
+      background:color-mix(in srgb,var(--warn) 12%,transparent);
+      border:1.5px solid color-mix(in srgb,var(--warn) 45%,transparent); font-size:13.5px;
+      line-height:1.7}
+.warn label{display:flex; gap:10px; align-items:flex-start; cursor:pointer}
+.warn input{flex:none; margin-top:3px; width:18px; height:18px; accent-color:var(--warn)}
+.warn.err{background:color-mix(in srgb,var(--danger) 12%,transparent);
+          border-color:color-mix(in srgb,var(--danger) 45%,transparent)}
+
 .rows > div{display:flex; gap:12px; padding:9px 14px; background:var(--card); font-size:14px}
 .rows > div > span:first-child{color:var(--muted); flex:none}
 .rows > div > span:last-child{margin-left:auto; text-align:right; word-break:break-all}
@@ -83,6 +110,32 @@ h2 .role{flex-basis:100%; font-size:12px; font-weight:400; color:var(--muted)}
 .badge[data-kind="ok"]   .dot{background:var(--ok)}
 .badge[data-kind="warn"] .dot{background:var(--warn)}
 .badge[data-kind="err"]  .dot{background:var(--danger)}
+
+/* 宽屏下 #slots 有 display:grid，ID 规则会盖掉 hidden 属性自带的 display:none
+   —— 槽位还没读到（或读失败）时得靠这条把整块骨架藏住 */
+#slots[hidden]{display:none}
+
+/* ── 槽列表 ──
+   窄屏是一排可横滑的标签，宽屏（见媒体查询）变成左列 */
+#slotList{display:flex; gap:8px; overflow-x:auto; margin-bottom:12px;
+          background:var(--card); border-radius:18px; padding:10px;
+          box-shadow:0 1px 3px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.06);
+          scrollbar-width:thin; scrollbar-color:var(--line) transparent}
+#slotList::-webkit-scrollbar{width:8px; height:8px}
+#slotList::-webkit-scrollbar-thumb{background:var(--line); border-radius:4px}
+#slotList::-webkit-scrollbar-track{background:transparent}
+.slot-item{display:flex; align-items:center; gap:10px; flex:0 0 auto;
+  min-height:48px; padding:10px 14px;
+  font:inherit; font-size:14px; font-weight:500; color:var(--text); text-align:left;
+  background:transparent; border:1.5px solid var(--line); border-radius:12px;
+  cursor:pointer; touch-action:manipulation; -webkit-tap-highlight-color:transparent;
+  transition:transform .08s, background .15s, border-color .15s}
+.slot-item:active{transform:scale(.98)}
+.slot-item:hover:not(.is-active){background:color-mix(in srgb,var(--text) 5%,transparent)}
+.slot-item.is-active{border-color:var(--accent); color:var(--accent); font-weight:600;
+                     background:color-mix(in srgb,var(--accent) 8%,transparent)}
+.slot-item .slot-name{flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.slot-item .slot-running{margin-left:6px; font-size:12px; font-weight:400; color:var(--muted)}
 
 /* 页面之间的跳转：真链接，不用 JS */
 .nav{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px}
@@ -100,7 +153,7 @@ footer{margin-top:20px; padding:0 4px; font-size:12px; color:var(--muted);
 footer a{color:var(--accent); text-decoration:none}
 footer a:hover{text-decoration:underline}
 
-/* ── 宽屏：三个槽卡并排（手机版仍是一列）── */
+/* ── 宽屏：左列表 + 右详情卡（手机版是标签条在上）── */
 @media (min-width:820px){
   body{padding:40px 32px 56px; font-size:17px}
   main{max-width:1120px}
@@ -110,10 +163,16 @@ footer a:hover{text-decoration:underline}
   .sub{font-size:14px}
   .panel{padding:26px; border-radius:22px}
   h2{font-size:16px}
-  #slots{display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:16px}
-  #slots > .panel{margin-bottom:0}
+  /* 左边一列槽，右边一张详情卡；列表跟着卡片一起滚，不用来回挑 */
+  #slots{display:grid; grid-template-columns:300px minmax(0, 1fr); gap:16px; align-items:start}
+  /* 槽多了列表自己滚，卡片不动 */
+  #slotList{display:grid; gap:8px; overflow-y:auto; margin-bottom:0;
+            position:sticky; top:24px; max-height:min(68vh, 34rem); padding:10px}
+  .slot-item{font-size:15px; min-height:52px; padding:12px 16px}
+  #slotDetail{margin-bottom:0}
   .status{padding:15px 16px; font-size:16px}
   .rows > div{font-size:15px; padding:11px 16px}
+  .hint{font-size:13.5px}
   a.btn{min-height:52px; font-size:15px}
   footer{font-size:13px}
 }
@@ -148,7 +207,31 @@ footer a:hover{text-decoration:underline}
     <p class="sub" id="phaseHint" style="margin-top:10px; text-align:left"></p>
   </div>
 
-  <div id="slots"></div>
+  <p class="sub" id="inspectNote" style="margin:0 4px 10px; text-align:left">「读取 / 刷新」显示设备上次校验结果；需要设备重新读回镜像核对摘要时，请点击「重新校验」（耗时较长）。</p>
+
+  <p class="sub" id="bootNote" hidden style="margin:0 4px 10px; text-align:left">设备无法判断当前从哪个槽启动，因此无法标出正在运行的分区。</p>
+
+  <!-- 槽位列表还没读到时的占位/失败提示：单独一块，不去动下面那套骨架 -->
+  <div class="panel" id="slotNotice">
+    <div class="rows"><div><span>槽位</span><span id="slotNoticeText">（正在读取…）</span></div></div>
+    <div class="actions" id="slotNoticeActions" hidden></div>
+  </div>
+
+  <div id="slots" hidden>
+    <div id="slotList"></div>
+
+    <div class="panel" id="slotDetail">
+      <h2><span class="title"></span><span class="badge"><span class="dot"></span><span class="badge-text"></span></span><span class="role"></span></h2>
+      <div class="sizebar" id="slotBar" hidden><i></i></div>
+      <p class="sizebar-text" id="slotBarText"></p>
+      <div class="rows"></div>
+      <p class="hint"></p>
+      <div class="warn" hidden><label>
+        <input type="checkbox" hidden><span></span>
+      </label></div>
+      <div class="actions"></div>
+    </div>
+  </div>
 
   <footer>
     <a href="/system/maintenance">固件维护</a> ·
@@ -164,70 +247,79 @@ footer a:hover{text-decoration:underline}
 (function () {
   'use strict';
 
-  /* 协议（和 maintenance.html 共用一套），定义在 src/ayachi_core/system.rs 的
-     impl CompactFormat（UploadProcess / SystemError / PartitionInfo）。
-     state 这个字段打的还是 Debug 的名字（Idle / Empty / Available），其余全走
-     CompactFormat：
+  /* 线格式（和 maintenance.html 共用；定义在 src/ayachi_core/system.rs 的 CompactFormat）：
+       progress  <uploading>|<state>|<message>|erase_cur;erase_total|write_cur;write_total
+       slot      <state>|<name>|<capacity>|<size>|<segment_count>|<entry_address>|<chip_id>|
+                 <hash_appended>|<secure_version>|<version>|<project>|<time>|<date>|<sha256>|<digest_sha256>
+     约定：没有的字段是 `/`；[T; N] 用 `;` 连、没括号（sha256 = `240;185;24;…` 十进制字节）；
+     state 打的是 Debug 名（Idle / Unchecked / Available…）。
 
-     progress  <uploading>|<state>|<message>|erase_cur;erase_total|write_cur;write_total
-     slot      <state>|<segment_count>|<entry_address>|<chip_id>|<hash_appended>|<secure_version>|
-               <version>|<project>|<time>|<date>|<sha256>|<digest_sha256>
+     `/system/slots` = 槽数（含 factory）；`/system/booted` = 启动的槽下标，设备说不出来时是 `/`。
+     槽在 URL 里是一个路径段：`factory` 或 `0`、`1`…（下标 n 对应段 n-1）。
+     读槽：`/system/status/<段>` 是设备缓存的结论（不碰 flash，便宜）——「读取 / 刷新」走它；
+     `/system/inspect/<段>` 让设备重新读回整幅镜像、走段表、重算 SHA-256（贵）——「重新校验」
+     走它。设备开机时已经把每个槽扫过一遍，所以 status 通常有内容；激活判的是同一份缓存，
+     所以页面上看到的结论就是设备会用的结论。   */
 
-     两个约定：没有的字段（Option::None）是字面量 `/`；[T; N] 用 `;` 连、没有括号
-     （所以 sha256 是 `240;185;24;…` 这种十进制字节，hash_appended 是 1 / 0）。   */
-
-  var SLOTS = [
-    // key 必须是小写：PartitionSlot 是 #[serde(rename_all = "lowercase")] ✓
-    { key:'factory', label:'origin（出厂分区）', role:'USB 烧写位置 · 不参与 OTA' },
-    { key:'current', label:'当前运行',          role:'当前启动的分区' },
-    { key:'next',    label:'备用分区',           role:'下一次激活的目标分区' }
-  ];
+  var SLOTS = [];           // 由 /system/slots 决定：0 号是 factory，其后依次是 OTA 槽
+  var BOOTED = null;        // 数字 = 设备启动的槽；null = 设备判断不出来
+  var slotData = [];        // 每个槽最近一次拿到的 14 个字段
+  var slotError = [];       // 每个槽最近一次读失败的原因（读之前 / 读成功后都是 null）
+  var STALE = [];           // 这个槽的内容可能已经被别人改过（进度跳到终态时打的标记）
+  var SELECTED = null;      // 详情卡正在展示哪个槽
+  var PENDING = null;       // 正在读的那个槽（按钮转成「读取中…」）
 
   var PHASE = {
     Idle:'空闲', Received:'已接收', Erasing:'擦除中', Writing:'写入中',
     Identifying:'校验中', Ready:'已完成', Failed:'失败'
   };
+  /* 和 maintenance.html 同一套规则（服务端也一样）：只有 Available 直接放行，
+     Unverified / Foreign 须勾选确认。Unchecked = 设备还没扫过这个槽。 */
   var SLOT_STATE = {
-    Unavailable:{ text:'不可用',   kind:'err'  },
-    Empty:      { text:'空',       kind:'idle' },
-    Unknown:    { text:'未知',     kind:'err'  },
-    Broken:     { text:'损坏',     kind:'err'  },
-    Unverified: { text:'未验证',   kind:'warn' },
-    Foreign:    { text:'外来固件', kind:'warn' },
-    Available:  { text:'可用',     kind:'ok'   }
+    Unchecked:  { text:'未检查',   kind:'idle', activatable:false },
+    ReadFailed: { text:'读取失败', kind:'err',  activatable:false },
+    Empty:      { text:'空',       kind:'idle', activatable:false },
+    Unknown:    { text:'未知',     kind:'err',  activatable:false },
+    Broken:     { text:'损坏',     kind:'err',  activatable:false },
+    Unverified: { text:'未验证',   kind:'warn', activatable:true, confirm:'unverified' },
+    Foreign:    { text:'外来固件', kind:'warn', activatable:true, confirm:'foreign' },
+    Available:  { text:'可用',     kind:'ok',   activatable:true }
   };
 
   var $ = function (id) { return document.getElementById(id); };
-  var slotsEl = $('slots'), phaseLine = $('phaseLine'), phaseEl = $('phase'),
-      bar = $('bar'), eraseEl = $('erase'), writeEl = $('write'), phaseHint = $('phaseHint');
+  var slotsEl = $('slots'), slotList = $('slotList'), slotDetail = $('slotDetail'),
+      slotNotice = $('slotNotice'), slotNoticeText = $('slotNoticeText'),
+      slotNoticeActions = $('slotNoticeActions'),
+      phaseLine = $('phaseLine'), phaseEl = $('phase'),
+      bar = $('bar'), eraseEl = $('erase'), writeEl = $('write'), phaseHint = $('phaseHint'),
+      bootNote = $('bootNote');
 
   $('host').textContent = location.host;
 
-  /* ── 服务端输出的解析 ── */
-  /* 一个槽 = 一次 `/system/status?slot=` 请求 = 12 个 `|` 分隔的字段，
-     槽不存在时整个响应就是字面量 `/`。 */
+  /* 一次 inspect 请求 = 15 个 `|` 分隔的字段（段不合法时服务端答 400，没有 body） */
   function splitInfo(body) {
     var s = str(body);
     return s === '' ? null : s.split('|');
   }
-  /* `/` 就是"这个字段没有"（CompactFormat 的 Option::None）；顺带认一下旧版的 `None` */
+  /* `/` = 这个字段没有（Option::None）；旧版的 `None` 也认 */
   function str(s)  { var v = (s === undefined || s === null) ? '' : String(s).trim(); return (v === '/' || v === 'None') ? '' : v; }
   function dec(s)  { var v = str(s); return v === '' ? null : Number(v); }
   function flag(s) { return str(s) === '1'; }
-  function hex(s)  {                                  // "78;40;201" → "4e28c9"
+  function hex(s)  {                                  // "78;40;201" → "4e28c9"（旧版用 `,` 分隔）
     var v = str(s);
     if (v === '') { return ''; }
-    return v.split(/[;,]/).map(function (b) {          // 你的 [T; N] 用 `;`（旧版用过 `,`）
+    return v.split(/[;,]/).map(function (b) {
       return ('0' + (parseInt(b, 10) & 0xff).toString(16)).slice(-2);
     }).join('');
   }
-  function pairOf(s) {                              // `cur;total`（[u32; 2] 的 CompactFormat）
+  function pairOf(s) {                              // `cur;total`
     var items = str(s).split(';');
     return items.length === 2 ? [Number(items[0]), Number(items[1])] : null;
   }
   function kib(n) { return (n / 1024).toFixed(0) + ' KiB'; }
-  /* 标着"这是设备给的 HTTP 错误"，用来和 fetch 自己的 reject（请求根本没到设备，
-     拿回来的是浏览器的 "Failed to fetch"）区分开：前者不该重试，后者该。 */
+  function mib(n) { return (n / 1048576).toFixed(2) + ' MiB'; }
+  function delay(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  /* 标出"设备给的 HTTP 错误"：它不该重试，fetch 自己的 reject（请求没到设备）才该 */
   function httpError(message) { var e = new Error(message); e.http = true; return e; }
 
   /* ── 进度 ── */
@@ -283,131 +375,308 @@ footer a:hover{text-decoration:underline}
     phaseHint.textContent = stuck && message ? ('中断原因：' + message)
                           : (state === 'Failed' && !message ? '固件不完整或校验不通过。' : '');
 
-    // 设备侧刚结束一次上传/校验 → 已经读过的 Next 卡可能过期了。
-    // 这里不发请求（分区信息只在你点击时才读），只给它打个标记。
-    if (state !== lastState && (state === 'Ready' || state === 'Failed')) { markStale(2); }
+    // 设备侧刚结束一次上传/校验 → 已经读过的卡都可能过期了（上传目标是哪个槽
+    // 这张页面并不知道）。这里不发请求，只给已经读过的卡打个标记。
+    if (state !== lastState && (state === 'Ready' || state === 'Failed')) { markStale(); }
     lastState = state;
   }
 
-  /* ── 三个槽：按需读取，进页面不发请求 ──────────────────────────────────
-     每张卡一开始只有一个「读取」按钮；读到的东西留在本地，点「详情」只做本地
-     展开/收起，要新数据就点「刷新」。这里没有任何定时器。 */
-  var slotData = [null, null, null];      // 每个槽最近一次拿到的 12 个字段
+  /* ── 数据 + 渲染 ──
+     一个槽的数据只有一份（slotData[i]），画面有两处：左列表（名称 + 徽章）和详情卡
+     （选中那个槽的全部内容与按钮）。读只改数据、按需重画 —— 所以"读到一半切走"不会
+     把 A 槽的结果画成 B 槽的。没有定时器。 */
 
-  function loadSlot(index, attempt) {
-    var card = document.getElementById('slot-' + SLOTS[index].key);
-    setActions(card, index, 'busy');
+  /* 两种读法，别混：
+       /system/status → 设备缓存的结论（不碰 flash，便宜）：「读取」「刷新」走它；
+       /system/inspect → 让设备重新读回镜像、走段表、重算 SHA-256（贵）：「重新校验」走它。
+     设备开机时已经把每个槽扫过一遍，所以 status 通常是有内容的。 */
+  function readSlot(index, recheck, attempt) {
+    PENDING = index;
+    renderDetail();
 
-    fetch('/system/status?slot=' + SLOTS[index].key, { cache: 'no-store' })
+    fetch((recheck ? '/system/inspect/' : '/system/status/') + SLOTS[index].seg, { cache: 'no-store' })
       .then(function (r) {
         if (r.status === 401) { throw httpError('登录已失效，请刷新页面'); }
         // 倒计时期间维护层把所有请求 303 到重启页，fetch 会跟着跳过去（拿到 200 + HTML）
         if (r.redirected) { throw httpError('设备正在重启，请稍后重试'); }
-        if (!r.ok) { throw httpError('HTTP ' + r.status); }
+        // 400 的响应体就是错误名（NotSupported / Invalid…），直接显示给用户
+        if (!r.ok) { return r.text().then(function (t) { throw httpError(t.trim() || ('HTTP ' + r.status)); }); }
         return r.text();
       })
       .then(function (body) { applySlot(index, body); })
       .catch(function (e) {
         // 请求根本没到设备（设备可能刚写完固件在恢复）→ 自动重试一次；HTTP 错误不重试
         if (!e.http && attempt !== false) {
-          setTimeout(function () { loadSlot(index, false); }, 900);
+          setTimeout(function () { readSlot(index, recheck, false); }, 900);
           return;
         }
-        failSlot(index, e.http ? e.message : '设备暂时没有响应，请点「重试」');
+        failSlot(index, e.http ? e.message : '设备暂时没有响应，请点击「重试」');
       });
   }
 
-  function failSlot(index, message) {
-    var card = document.getElementById('slot-' + SLOTS[index].key);
-    card.querySelector('.badge').dataset.kind = 'err';
-    card.querySelector('.badge-text').textContent = '读取失败';
-    var rows = card.querySelector('.rows');
-    rows.textContent = '';
-    rows.appendChild(makeRow('失败', message));
-    slotData[index] = null;
-    setActions(card, index, 'retry');
-  }
-
-  /* 设备侧刚跑完一次上传/校验：已经读过的那张卡内容可能变了。
-     不发请求，只在「刷新」按钮上做个标记，等你点。 */
-  function markStale(index) {
-    if (!slotData[index]) { return; }
-    var card = document.getElementById('slot-' + SLOTS[index].key);
-    card.dataset.stale = '1';
-    var refresh = card.querySelector('.actions button:last-child');
-    if (refresh && refresh.textContent === '刷新') {
-      refresh.classList.add('stale');
-      refresh.textContent = '刷新（内容有更新）';
-    }
-  }
-
   function applySlot(index, body) {
-    var card = document.getElementById('slot-' + SLOTS[index].key);
-    var badge = card.querySelector('.badge'), badgeText = card.querySelector('.badge-text');
-    var rows = card.querySelector('.rows');
-    rows.textContent = '';
-    card.dataset.stale = '';
-
-    // 槽不存在：Option::None，整个响应就是 `/`
-    if (str(body) === '') {
-      badge.dataset.kind = 'idle';
-      badgeText.textContent = '不存在';
-      rows.appendChild(makeRow('内容', '（分区表中无此分区）'));
-      slotData[index] = null;
-      setActions(card, index, 'retry');
-      return;
-    }
-
+    // 槽不存在时服务端直接 400（在 readSlot 里已经报给用户了）。字段数按"至少 15"判：
+    // 少了 = 响应被截断（设备侧 FixedString 溢出会把整条换成字面量 `truncated`）；
+    // 多了 = 设备又加了字段，页面按前 15 个用就行，不用跟着改。
     var f = splitInfo(body);
-    if (f === null || f.length !== 12) {
-      badge.dataset.kind = 'err';
-      badgeText.textContent = '格式无法识别';
-      rows.appendChild(makeRow('字段数', String(f ? f.length : 0) + '（应为 12 个字段）'));
-      rows.appendChild(makeRow('响应开头', String(body).trim().slice(0, 120), true));
+    PENDING = null;
+    STALE[index] = false;
+    if (f && f.length >= 15) {
+      slotData[index] = f;
+      slotError[index] = null;
+    } else {
       slotData[index] = null;
-      setActions(card, index, 'retry');
-      return;
+      slotError[index] = '字段数不足（收到 ' + (f ? f.length : 0) + ' 个，至少应为 15 个），响应可能已被截断。';
     }
-
-    var state = f[0].trim();
-    var meta = SLOT_STATE[state] || { text: state, kind: 'idle' };
-    badge.dataset.kind = meta.kind;
-    badgeText.textContent = meta.text;
-    slotData[index] = f;
-    rows.appendChild(makeRow('版本', str(f[6]) || '—'));
-    setActions(card, index, 'loaded');
+    renderList();
+    renderDetail();
   }
 
-  /* mode：'load' 还没读过 / 'retry' 读失败或槽不存在 / 'busy' 正在读
-           'loaded' 手上有数据 → 两个按钮：详情（纯本地展开）+ 刷新（唯一发请求的那个） */
-  function setActions(card, index, mode) {
-    var box = card.querySelector('.actions');
-    box.textContent = '';
-    box.classList.toggle('two', mode === 'loaded');
+  function failSlot(index, message) {
+    PENDING = null;
+    slotData[index] = null;
+    slotError[index] = message;
+    renderList();
+    renderDetail();
+  }
 
-    if (mode === 'busy') {
+  /* 设备侧刚跑完一次上传/校验：读过的槽内容都可能变了（目标是哪个槽本页并不知道）。
+     不发请求，只做标记 —— 顺带撤掉「激活」，手上那份结论可能已经不作数。 */
+  function markStale() {
+    for (var i = 0; i < SLOTS.length; i++) {
+      if (slotData[i]) { STALE[i] = true; }
+    }
+    renderList();
+    renderDetail();
+  }
+
+  /* 一次只有一张卡：下面这几个都是"重画当前选中的那个槽" */
+  function selectSlot(index) {
+    if (index === SELECTED) { return; }
+    SELECTED = index;
+    renderList();
+    revealSelected();
+    renderDetail();
+  }
+
+  function renderList() {
+    slotList.textContent = '';
+    for (var i = 0; i < SLOTS.length; i++) { slotList.appendChild(makeListItem(i)); }
+  }
+
+  /* 窄屏上列表是横滑的：选中的那条要是滑出去了，把它带回来 */
+  function revealSelected() {
+    var item = slotList.children[SELECTED];
+    if (item && item.scrollIntoView) {
+      item.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  }
+
+  function makeListItem(index) {
+    var item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'slot-item' + (index === SELECTED ? ' is-active' : '');
+
+    var name = document.createElement('span');
+    name.className = 'slot-name';
+    name.textContent = SLOTS[index].label;
+    if (isBooted(index)) {
+      var running = document.createElement('span');
+      running.className = 'slot-running';
+      running.textContent = '当前运行';
+      name.appendChild(running);
+    }
+
+    var state = listState(index);
+    var badge = document.createElement('span');
+    badge.className = 'badge';
+    badge.dataset.kind = state.kind;
+    badge.innerHTML = '<span class="dot"></span>';       // 固定字符串，不掺用户数据
+    var text = document.createElement('span');
+    text.textContent = state.text;
+    badge.appendChild(text);
+
+    item.appendChild(name);
+    item.appendChild(badge);
+    item.addEventListener('click', function () { selectSlot(index); });
+    return item;
+  }
+
+  /* 列表条目上的状态：读失败 > 设备给的结论 > 未读取；内容过期了在文案里标出来 */
+  function listState(index) {
+    if (slotError[index]) { return { text: '读取失败', kind: 'err' }; }
+    var meta = metaOf(index);
+    if (!meta) { return { text: '未读取', kind: 'idle' }; }
+    return { text: meta.text + (STALE[index] ? ' · 待刷新' : ''), kind: meta.kind };
+  }
+
+  function renderDetail() {
+    if (SELECTED === null) { return; }
+    var index = SELECTED, state = listState(index), f = slotData[index];
+
+    // 标题左上 = 设备报的分区名（还没读到就先用"分区 N"占位），右上还是状态徽章
+    slotDetail.querySelector('.title').textContent = (f && str(f[1])) || SLOTS[index].label;
+    slotDetail.querySelector('.role').textContent = SLOTS[index].role;
+    var badge = slotDetail.querySelector('.badge');
+    badge.dataset.kind = state.kind;
+    slotDetail.querySelector('.badge-text').textContent = state.text;
+
+    renderSizeBar(index);
+
+    var rows = slotDetail.querySelector('.rows');
+    rows.textContent = '';
+    if (f) {
+      fillRows(rows, f);          // 字段一次全列出来（没有「详情」折叠了）
+    } else {
+      rows.appendChild(makeRow(slotError[index] ? '失败' : '内容',
+                               slotError[index] || '（请点击下方「读取」获取分区信息）'));
+    }
+
+    renderActions(index);
+    renderConclusion(index);
+  }
+
+  /* 按钮：正在读 = 禁用的「读取中…」；有数据 = 刷新 | 重新校验 + 激活；否则 = 读取 / 重试 */
+  function renderActions(index) {
+    var box = slotDetail.querySelector('.actions');
+    box.textContent = '';
+    box.classList.toggle('two', !!slotData[index]);
+
+    if (PENDING === index) {
       var busy = makeButton('读取中…', function () {});
       busy.disabled = true;
       box.appendChild(busy);
       return;
     }
-    if (mode === 'load') {
-      box.appendChild(makeButton('读取', function () { loadSlot(index); }));
+    if (!slotData[index]) {
+      box.appendChild(makeButton(slotError[index] ? '重试' : '读取',
+                                 function () { readSlot(index, false); }));
       return;
     }
-    if (mode === 'retry') {
-      box.appendChild(makeButton('重试', function () { loadSlot(index); }));
+    var refresh = makeButton(STALE[index] ? '刷新（内容有更新）' : '刷新',
+                             function () { readSlot(index, false); });
+    refresh.className = STALE[index] ? 'refresh stale' : 'refresh';
+    var recheck = makeButton('重新校验', function () { readSlot(index, true); });
+    recheck.className = 'recheck';
+    var go = makeButton(activateLabel(index), function () { activateSlot(index); });
+    go.className = 'go';
+    box.appendChild(refresh);
+    box.appendChild(recheck);
+    box.appendChild(go);
+  }
+
+  /* ── 激活 ──
+     服务端那三条守卫（槽存在、内容能启动、没有上传在跑）之外，这里再加三条：
+     内容没读过、被标记为过期、以及设备正在运行的那个槽 —— 都没有可切换的对象。 */
+
+  function metaOf(index) {
+    var f = slotData[index];
+    if (!f) { return null; }
+    var state = f[0].trim();
+    var meta = SLOT_STATE[state] || { text: state, kind: 'idle', activatable: false };
+    return { state: state, text: meta.text, kind: meta.kind,
+             activatable: meta.activatable, confirm: meta.confirm };
+  }
+
+  function isBooted(index) { return BOOTED !== null && BOOTED === index; }
+
+  function activateLabel(index) {
+    return SLOTS[index].seg === 'factory' ? '返回出厂设置' : '激活';
+  }
+
+  /* 把结论和确认项重新算一遍：hint 说明理由，warn 条只在需要勾选时露出来，
+     「激活」按钮的可用性跟着一起更新。只对当前选中那张卡有效。 */
+  function renderConclusion(index) {
+    if (index !== SELECTED) { return; }
+    var card = slotDetail;
+    var hint = card.querySelector('.hint');
+    var box = card.querySelector('.warn'), check = box.querySelector('input'),
+        text = box.querySelector('span');
+    var go = card.querySelector('.actions .go');
+
+    box.hidden = true;
+    box.className = 'warn';
+    check.checked = false;
+    check.hidden = true;
+    delete hint.dataset.kind;
+    hint.textContent = '';
+    if (go) { go.disabled = true; }
+
+    var meta = metaOf(index);
+    if (!meta) { return; }
+
+    if (isBooted(index)) {
+      hint.textContent = '该槽为设备当前运行的分区，无需切换。';
+      return;
+    }
+    if (STALE[index]) {
+      hint.textContent = '进度结束后该槽的内容可能已被改写，请先刷新再切换。';
+      return;
+    }
+    if (!meta.activatable) {
+      hint.textContent = {
+        Unchecked: '设备尚未检查该槽（可能正在写入），请点击「重新校验」强制读取。',
+        Empty:     '该槽为空，写入固件后方可切换。',
+        Unknown:   '该槽内为 ESP 镜像，但缺少应用描述符，无法作为应用启动，需重新写入固件。',
+        Broken:    '该镜像未通过校验：结构或摘要不一致，需重新写入固件。'
+      }[meta.state] || '该分区的内容无法用于启动，需重新写入固件。';
+      return;
+    }
+    if (!meta.confirm) {                                  // Available：直接放行
+      hint.textContent = '该镜像校验通过，可直接切换；设备将在倒计时结束后重启。';
+      if (go) { go.disabled = false; }
       return;
     }
 
-    var detail = makeButton('详情', function () { toggleDetail(index, detail); });
-    var refresh = makeButton('刷新', function () { loadSlot(index); });
-    if (card.dataset.stale === '1') {
-      refresh.classList.add('stale');
-      refresh.textContent = '刷新（内容有更新）';
+    // 未验证 / 外来固件：必须勾选才放行，勾选后由 change 处理器开按钮
+    box.hidden = false;
+    check.hidden = false;
+    if (meta.confirm === 'foreign') {
+      text.textContent = '该镜像并非由本项目构建，其声明的项目名称为「'
+        + (str(slotData[index][10]) || '?') + '」。切换后设备将运行来源不明的固件。'
+        + '此操作不可逆：重启后仅能通过 USB 重新烧写，方可恢复门禁功能。';
+    } else {
+      text.textContent = '该镜像未附带摘要，设备无法校验其内容。切换前请自行核对 SHA-256：'
+        + '下方「镜像摘要」由设备从 flash 读回，须与发布方公布的摘要一致。'
+        + '勾选左侧复选框后方可切换。';
     }
-    box.appendChild(detail);
-    box.appendChild(refresh);
+  }
+
+  /* 勾选框变了：只重算按钮，别的（含勾选状态）都不动 */
+  function updateActivateGate(index) {
+    if (index !== SELECTED) { return; }
+    var go = slotDetail.querySelector('.actions .go');
+    if (!go) { return; }
+    var meta = metaOf(index);
+    var check = slotDetail.querySelector('.warn input');
+    go.disabled = !(meta && meta.activatable && !isBooted(index) && !STALE[index]
+                    && (!meta.confirm || check.checked));
+  }
+
+  function activateSlot(index) {
+    if (index !== SELECTED) { return; }
+    var go = slotDetail.querySelector('.actions .go');
+
+    go.disabled = true;
+    go.textContent = '切换中…';
+
+    fetch('/system/activate/' + SLOTS[index].seg, { method: 'POST', cache: 'no-store' })
+      .then(function (r) {
+        // 倒计时期间维护层把这条 POST 303 到重启页 —— 这次点击并没有生效
+        if (r.redirected) { throw new Error('设备正在切换或重启，本次操作未生效'); }
+        return r.text().then(function (t) {
+          if (r.status === 401) { throw new Error('登录已失效，请刷新页面'); }
+          if (!r.ok) { throw new Error(t.trim() || ('HTTP ' + r.status)); }
+          return t;
+        });
+      })
+      .then(function () { location.href = '/system/resetting'; })
+      .catch(function (e) {
+        renderDetail();                     // 按钮和确认项恢复原状（勾选也清掉）
+        var hint = slotDetail.querySelector('.hint');
+        hint.dataset.kind = 'err';
+        hint.textContent = '切换失败：' + e.message;
+      });
   }
 
   function makeButton(text, onclick) {
@@ -418,34 +687,43 @@ footer a:hover{text-decoration:underline}
     return btn;
   }
 
-  function toggleDetail(index, btn) {
-    var rows = document.getElementById('slot-' + SLOTS[index].key).querySelector('.rows');
-    rows.textContent = '';
+  /* 顺序跟着设备给的字段走（名称 / 容量 / 占用 / 状态不在这里：它们在标题、占用条和徽章上） */
+  function fillRows(rows, f) {
+    var addr = dec(f[5]);
+    rows.appendChild(makeRow('段数',      dec(f[4]) === null ? '—' : String(dec(f[4]))));
+    rows.appendChild(makeRow('入口地址',  addr === null ? '—' : ('0x' + addr.toString(16))));
+    rows.appendChild(makeRow('芯片 ID',   dec(f[6]) === null ? '—' : String(dec(f[6]))));
+    rows.appendChild(makeRow('附加摘要',  str(f[7]) === '' ? '—' : (flag(f[7]) ? '有' : '无')));
+    rows.appendChild(makeRow('安全版本',  dec(f[8]) === null ? '—' : String(dec(f[8]))));
+    rows.appendChild(makeRow('版本',      str(f[9]) || '—'));
+    rows.appendChild(makeRow('项目',      str(f[10]) || '—'));
+    rows.appendChild(makeRow('编译时间',  ((str(f[11]) + '  ' + str(f[12])).trim()) || '—'));
+    rows.appendChild(makeRow('ELF 摘要',  hex(f[13]) || '—', true));
+    rows.appendChild(makeRow('镜像摘要',  hex(f[14]) || '—', true));
+  }
 
-    if (btn.dataset.open === '1') {                         // 收起（本地，不发请求）
-      btn.dataset.open = '';
-      btn.textContent = '详情';
-      rows.appendChild(makeRow('版本', str(slotData[index][6]) || '—'));
+  /* 标题下那条占用条：镜像占用（size）/ 槽容量（capacity）。
+     设备还没报（字段缺席或是 `/`）就整条藏起来 */
+  function renderSizeBar(index) {
+    var f = slotData[index];
+    var bar = slotDetail.querySelector('.sizebar'), text = slotDetail.querySelector('.sizebar-text');
+    var used = f ? dec(f[3]) : null;
+    var total = f ? dec(f[2]) : null;
+
+    if (used === null || total === null || total === 0) {
+      bar.hidden = true;
+      text.textContent = '';
       return;
     }
-    fillRows(rows, slotData[index]);
-    btn.dataset.open = '1';
-    btn.textContent = '收起';
+    var pct = Math.min(100, Math.round(used * 100 / total));
+    bar.hidden = false;
+    bar.firstElementChild.style.width = pct + '%';
+    text.textContent = '镜像 ' + mib(used) + ' / 容量 ' + mib(total) + '（' + pct + '%）';
   }
 
-  function fillRows(rows, f) {
-    var addr = dec(f[2]);
-    rows.appendChild(makeRow('版本',      str(f[6]) || '—'));
-    rows.appendChild(makeRow('项目',      str(f[7]) || '—'));
-    rows.appendChild(makeRow('编译时间',  ((str(f[8]) + '  ' + str(f[9])).trim()) || '—'));
-    rows.appendChild(makeRow('安全版本',  dec(f[5]) === null ? '—' : String(dec(f[5]))));
-    rows.appendChild(makeRow('段数',      dec(f[1]) === null ? '—' : String(dec(f[1]))));
-    rows.appendChild(makeRow('入口地址',  addr === null ? '—' : ('0x' + addr.toString(16))));
-    rows.appendChild(makeRow('芯片 ID',   dec(f[3]) === null ? '—' : String(dec(f[3]))));
-    rows.appendChild(makeRow('附加摘要',  str(f[4]) === '' ? '—' : (flag(f[4]) ? '有' : '无')));
-    rows.appendChild(makeRow('ELF 摘要',  hex(f[10]) || '—', true));
-    rows.appendChild(makeRow('镜像摘要',  hex(f[11]) || '—', true));
-  }
+  /* 字段顺序：state|name|capacity|size|segment_count|entry_address|chip_id|hash_appended|
+     secure_version|version|project|time|date|sha256|digest_sha256
+     name / capacity / size / state 不进这张表 —— 它们在标题、占用条和徽章上 */
 
   function makeRow(label, value, mono) {
     var div = document.createElement('div');
@@ -458,30 +736,80 @@ footer a:hover{text-decoration:underline}
     return div;
   }
 
-  /* 进页面就把三张卡按固定顺序建出来（谁先返回都不影响顺序）。
-     卡里只有一个「读取」按钮 —— 分区信息不进页面不发请求。 */
-  function initCards() {
-    for (var i = 0; i < SLOTS.length; i++) {
-      var slot = SLOTS[i];
-      if (document.getElementById('slot-' + slot.key)) { continue; }
-      var card = document.createElement('div');
-      card.className = 'panel';
-      card.id = 'slot-' + slot.key;
-      card.innerHTML = '<h2><span class="title"></span><span class="role"></span>'
-                     + '<span class="badge"><span class="dot"></span><span class="badge-text"></span></span></h2>'
-                     + '<div class="rows"></div>'
-                     + '<div class="actions"></div>';
-      card.querySelector('.title').textContent = slot.label;
-      card.querySelector('.role').textContent = slot.role;
-      card.querySelector('.badge-text').textContent = '未读取';
-      card.querySelector('.rows').appendChild(makeRow('内容', '（点击下方「读取」获取）'));
-      slotsEl.appendChild(card);
-      setActions(card, i, 'load');
-    }
+  /* 进页面先问两件事：一共几个槽、设备启动的是哪个 —— 没有这两个就画不出列表 */
+  function readText(r) {
+    if (r.status === 401) { return Promise.reject(httpError('登录已失效，请刷新页面')); }
+    if (r.redirected) { return Promise.reject(httpError('设备正在重启，请稍后重试')); }
+    if (!r.ok) { return r.text().then(function (t) { throw httpError(t.trim() || ('HTTP ' + r.status)); }); }
+    return r.text();
   }
 
-  initCards();
-  refreshProgress();                     // 进度是实时量，100 字节，立刻来一发
+  /* 进页面先问两件事：一共几个槽、设备启动的是哪个 —— 没有这两个就画不出列表。
+     两个请求错开 250 ms 发（不是同时）：设备就一个核，每个请求还要先付一次 PBKDF2，
+     一起打过去只会互相排队，还可能把 4 个连接槽占满。 */
+  function loadSlots(attempt) {
+    slotNotice.hidden = false;
+    slotNoticeText.textContent = '（正在读取…）';
+    slotNoticeActions.hidden = true;
+
+    Promise.all([
+      fetch('/system/slots',  { cache: 'no-store' }).then(readText),
+      delay(250).then(function () { return fetch('/system/booted', { cache: 'no-store' }).then(readText); })
+    ]).then(function (t) {
+      var count = Number(t[0].trim());
+      if (!Number.isInteger(count) || count < 1) { throw httpError('槽位数无法识别'); }
+      var booted = t[1].trim();
+      initSlots(count, booted === '/' ? null : Number(booted));
+    }).catch(function (e) {
+      // 请求根本没到设备（可能刚写完固件在恢复）→ 自动重试一次；HTTP 错误不重试
+      if (!e.http && attempt !== false) { setTimeout(function () { loadSlots(false); }, 900); return; }
+      slotNoticeText.textContent = e.http ? e.message : '设备暂时没有响应';
+      slotNoticeActions.hidden = false;
+      slotNoticeActions.textContent = '';
+      slotNoticeActions.appendChild(makeButton('重试', function () { loadSlots(); }));
+    });
+  }
+
+  /* 0 号 = factory，其后依次是 OTA 槽（URL 段就是 0、1…）。默认停在设备正在运行的那个
+     槽（回答"现在跑的是什么"），它说不出来就退到第一个。 */
+  function initSlots(count, booted) {
+    // 标题按设备的下标空间编号：0 = factory，其后 1、2…（分段名仍是 `factory`/`0`/`1`）
+    // 读到之后标题会换成设备报的真实分区名，这里只是还没读到时的占位
+    SLOTS = [{ seg:'factory', label:'分区 0', role:'USB 烧写位置 · 不参与 OTA' }];
+    for (var i = 0; i < count - 1; i++) {
+      SLOTS.push({ seg: String(i), label: '分区 ' + (i + 1), role: '可作为上传目标' });
+    }
+    BOOTED = (booted !== null && SLOTS[booted]) ? booted : null;
+    if (BOOTED !== null) {
+      // 设备拒绝把镜像写进正在运行的那个槽（写进去等于擦掉正在执行的代码），
+      // 所以它不能再挂着"可作为上传目标"—— factory 本来就不参与 OTA，追加即可。
+      SLOTS[BOOTED].role = (BOOTED === 0)
+        ? SLOTS[BOOTED].role + ' · 当前运行'
+        : '当前运行 · 不可作为上传目标';
+    }
+    bootNote.hidden = (BOOTED !== null);
+
+    slotData  = SLOTS.map(function () { return null; });
+    slotError = SLOTS.map(function () { return null; });
+    STALE     = SLOTS.map(function () { return false; });
+    PENDING = null;
+    SELECTED = (BOOTED !== null) ? BOOTED : 0;
+
+    slotNotice.hidden = true;
+    slotsEl.hidden = false;
+    renderList();
+    revealSelected();
+    renderDetail();
+  }
+
+  // 确认框在静态标记里（只有一张卡），挂一次就够；加不加用当前选中的那个槽判断
+  slotDetail.querySelector('.warn input').addEventListener('change', function () {
+    updateActivateGate(SELECTED);
+  });
+
+  loadSlots();
+  // 进度是实时量、100 字节一行，但也别跟上面那两个请求挤在同一下 —— 错开半秒再发
+  setTimeout(refreshProgress, 500);
   setInterval(refreshProgress, 2000);    // 也只有它会自己轮询
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden) { refreshProgress(); }

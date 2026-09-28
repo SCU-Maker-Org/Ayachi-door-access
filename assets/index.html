@@ -98,6 +98,8 @@ button:disabled{opacity:.4; cursor:default; transform:none}
   font-size:13.5px; color:var(--muted); text-align:center;
   transition:color .2s;
 }
+/* 没有话要说的时候别占着一行空白（面板会随第一句话出现而长高一点，可接受） */
+#msg:empty{display:none}
 #msg[data-kind="ok"]  {color:var(--open)}
 #msg[data-kind="err"] {color:var(--danger)}
 
@@ -219,13 +221,13 @@ footer a:hover{text-decoration:underline}
   function send(url, btn, done) {
     lockButtons(true);
     if (btn) { btn.classList.add('busy'); }
-    say('执行中…');
+    say('正在执行…');
 
     fetch(url, { cache: 'no-store' })
       .then(function (r) {
         // 切换倒计时期间维护层会把所有请求 303 到重启页，fetch 会安静地跟着跳过去：
         // 指令根本没执行，拿到的却是 200。这种情况绝不能报"成功"——门没开。
-        if (r.redirected) { throw new Error('设备正在切换 / 重启，指令没有送达'); }
+        if (r.redirected) { throw new Error('设备正在切换或重启，指令未送达。'); }
         return r.text().then(function (body) {
           if (!r.ok) { throw new Error(body.trim() || ('HTTP ' + r.status)); }
         });
@@ -243,13 +245,13 @@ footer a:hover{text-decoration:underline}
     // UI 层防御：门已经开放时不再发请求。
     // 真正的守卫在服务端 —— door_task 里 `status() == Lock` 那个判断。
     if (statusEl.dataset.open === '1') {
-      say('门当前已处于开放状态');
+      say('门当前已处于开放状态。');
       return;
     }
 
     // "3 秒"跟着 server_config.toml 的 door.open_once_delay 走（默认 3000 ms）：
     // 换了配置这句文案就会说谎，要么一起改，要么别写数字。
-    send('/open', openBtn, '已开门，将在 3 秒后自动上锁');
+    send('/open', openBtn, '已开门，将在 3 秒后自动上锁。');
   });
 
   document.querySelectorAll('button[data-act]').forEach(function (btn) {
@@ -259,7 +261,9 @@ footer a:hover{text-decoration:underline}
   });
 
   refresh();
-  setInterval(refresh, 3000);   // 开门后会自动上锁（door.open_once_delay），轮询快一点才看得到
+  // 开门后会自动上锁（door.open_once_delay = 3000ms），1.5s 一问才看得到那次变化。
+  // /status 未鉴权 → 不花 PBKDF2，这个频率很便宜。
+  setInterval(refresh, 1500);
 
   // 页面回到前台时立刻刷一次
   document.addEventListener('visibilitychange', function () {
